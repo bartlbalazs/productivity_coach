@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Poetry
+poetry.lock
+
+# Database & user data
+*.db
+*.sqlite
+~/.coach/
+
+# Preferences
+.coach/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.log

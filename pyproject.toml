@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "coach"
+version = "0.1.0"
+description = "AI-powered productivity coach that monitors your focus using webcam and screen captures"
+authors = []
+readme = "README.md"
+packages = [{include = "coach"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+streamlit = "^1.40"
+langgraph = "^1.0"
+langchain-google-vertexai = "^2.0"
+langchain-core = "^1.0"
+pynput = "^1.7"
+opencv-python-headless = "^4.10"
+Pillow = "^11.0"
+mss = "^9.0"
+pydantic = "^2.10"
+pandas = "^2.0"
+pygame = "^2.5"
+numpy = "^1.26"
+piper-tts = "^1.4"
+spotipy = ">=2.24"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
