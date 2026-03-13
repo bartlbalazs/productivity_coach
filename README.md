@@ -1,4 +1,8 @@
-# Productivity Coach
+# 🚀 Productivity Coach
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io)
 
 An AI-powered deep work assistant that watches your focus in real time through your webcam, coaches you with direct instructions, enforces a Pomodoro-style sprint rhythm, and tracks every session so you can see exactly where your time goes.
 
@@ -6,7 +10,28 @@ Built with [Streamlit](https://streamlit.io), [LangGraph](https://github.com/lan
 
 ---
 
-## How it works
+## 📑 Table of Contents
+
+- [⚙️ How it works](#️-how-it-works)
+- [✨ Features](#-features)
+  - [🧠 Core coaching](#-core-coaching)
+  - [⏱️ Pomodoro sprint system](#️-pomodoro-sprint-system)
+  - [📋 Task list](#-task-list)
+  - [🔔 Audio & notifications](#-audio--notifications)
+  - [🔋 Break quality](#-break-quality)
+  - [📊 Analytics](#-analytics)
+  - [💾 Data & export](#-data--export)
+- [🔌 Integrations](#-integrations)
+  - [🎵 Spotify](#-spotify)
+  - [⌚ Fitbit](#-fitbit)
+- [🚀 Quick start](#-quick-start)
+- [🛠️ Tech stack](#️-tech-stack)
+- [🔒 Privacy](#-privacy)
+- [📄 License](#-license)
+
+---
+
+## ⚙️ How it works
 
 Every 1-2 minutes (randomised interval) the app captures a webcam frame and sends it to Gemini along with a rolling history of recent check-ins, your session goal, current sprint time, task list, and optional Spotify/Fitbit context. The model returns a structured coaching assessment — focus score, activity label, distraction category, coaching instruction, and posture feedback — and the UI updates instantly.
 
@@ -19,9 +44,9 @@ All session data is stored locally in SQLite. Nothing leaves your machine except
 
 ---
 
-## Features
+## ✨ Features
 
-### Core coaching
+### 🧠 Core coaching
 - Real-time focus score (1-10) with colour-coded coaching card
 - Two-mode system (FOCUS / REST) with intelligent mode switching
 - Posture correction callout when the webcam can see you
@@ -31,29 +56,29 @@ All session data is stored locally in SQLite. Nothing leaves your machine except
 - Session goal input — passed to the LLM every cycle so coaching stays on-topic
 - Pause / Resume without ending the session
 
-### Pomodoro sprint system
+### ⏱️ Pomodoro sprint system
 - Circular sprint timer in the UI: green (< 25 min), amber (25-40 min), red (> 40 min)
 - **Ideal sprint**: 25-30 minutes — the AI is instructed not to call REST before the 20-minute minimum
 - **Hard cap**: 40 minutes — the scheduler forces a REST transition regardless of AI output
 - **Short break**: 5 minutes; **long break**: 15 minutes after every 4th completed sprint
 - Sprint count tracked and shown in the sidebar throughout the session
 
-### Task list
+### 📋 Task list
 - Add notes to the session log at any time during a session
 - On each note submission, Gemini automatically extracts and deduplicates actionable tasks (max 10 words each) from the full session log
 - Tasks appear in a live list beside the sprint timer with **▶ set as current focus** and **✓ mark done** controls
 - Completed tasks are never re-created; when the list is empty the AI prompts you to add tasks and rewards task planning with a high focus score
 
-### Audio & notifications
+### 🔔 Audio & notifications
 - Synthesised audio cues — ascending chime on FOCUS, descending tone on REST (pygame + numpy, no audio files)
 - Neural text-to-speech via [Piper](https://github.com/rhasspy/piper) — coaching instructions read aloud on mode changes, persistent low focus (> 3 min), persistent posture issues (> 3 min), and poor break quality (auto-downloads ~100 MB voice model on first use)
 - Desktop notifications via browser + `notify-send` for the same events
 
-### Break quality
+### 🔋 Break quality
 - Algorithmic break quality scoring from keyboard and mouse activity (via `pynput`) — no LLM guessing
 - High input activity during REST = poor break score; genuine rest = high score
 
-### Analytics
+### 📊 Analytics
 
 **Session Insights** — deep dive into a single session:
 - Header metrics: duration, check-in count, average focus score, focused %, mode switches, average break quality
@@ -81,20 +106,20 @@ All session data is stored locally in SQLite. Nothing leaves your machine except
 - Summary stats: total calls, input/output tokens, average latency, error count
 - Per-call expandable detail: model, tokens, latency, full request and response
 
-### Data & export
+### 💾 Data & export
 - Local SQLite database at `~/.coach/coach.db`
 - CSV export from the sidebar
 - LLM-generated session summary persisted at the end of each session (headline, overall score, peak period, key observations, tomorrow's actions, correlation insights, unfinished items inferred from the session log)
 
 ---
 
-## Integrations
+## 🔌 Integrations
 
-### Spotify
+### 🎵 Spotify
 
 Connects via OAuth Authorization Code Grant to read the currently playing track, artist, album, and playback state. This context is sent to the LLM each cycle so the coaching can reference your music — e.g. noting that you've been in a long listening streak (likely flow state) or that you switched to a distracting playlist. Token cached at `~/.coach/spotify_token.json`.
 
-### Fitbit
+### ⌚ Fitbit
 
 Connects via OAuth 2.0 with PKCE to read health data from the Fitbit Web API:
 
@@ -108,7 +133,7 @@ Health metrics are included in the LLM system prompt so coaching can account for
 
 ---
 
-## Quick start
+## 🚀 Quick start
 
 ```bash
 # 1. Clone
@@ -132,7 +157,7 @@ For detailed setup instructions including Spotify and Fitbit integration, see th
 
 ---
 
-## Tech stack
+## 🛠️ Tech stack
 
 | Layer | Technology |
 |---|---|
@@ -153,12 +178,12 @@ For detailed setup instructions including Spotify and Fitbit integration, see th
 
 ---
 
-## Privacy
+## 🔒 Privacy
 
 Webcam frames are sent to the Google Vertex AI API for analysis each cycle. If Spotify or Fitbit are connected, the currently playing track and health metrics are included in the LLM context. All session data (focus scores, activity labels, coaching instructions, health metrics, task list) is stored locally in SQLite at `~/.coach/coach.db`. Nothing is sent to Google beyond what is needed for the Vertex AI inference call.
 
 ---
 
-## License
+## 📄 License
 
 MIT
