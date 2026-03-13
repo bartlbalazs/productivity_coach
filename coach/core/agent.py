@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _get_llm(temperature: float = 0.3) -> ChatVertexAI:
+def _get_llm(temperature: float = 0.3, model_name: str | None = None) -> ChatVertexAI:
     """Return a ChatVertexAI instance using ADC, targeting the global Vertex endpoint."""
     return ChatVertexAI(
-        model_name=config.model,
+        model_name=model_name or config.model,
         project=config.gcp_project or None,
         location=config.vertex_location,
         temperature=temperature,
@@ -948,7 +948,9 @@ def extract_tasks(
     ]
     request_text = _serialize_messages(messages)
 
-    structured_llm = _get_llm(temperature=0.1).with_structured_output(_TaskList)
+    structured_llm = _get_llm(
+        temperature=0.1, model_name="gemini-2.5-flash"
+    ).with_structured_output(_TaskList)
 
     t0 = time.perf_counter()
     try:
@@ -956,7 +958,7 @@ def extract_tasks(
         latency_ms = int((time.perf_counter() - t0) * 1000)
         save_llm_call(
             call_type="extract_tasks",
-            model=config.model,
+            model="gemini-2.5-flash",
             request_text=request_text,
             response_text=result.model_dump_json(),
             latency_ms=latency_ms,
@@ -967,7 +969,7 @@ def extract_tasks(
         logger.warning("extract_tasks failed: %s", exc)
         save_llm_call(
             call_type="extract_tasks",
-            model=config.model,
+            model="gemini-2.5-flash",
             request_text=request_text,
             error=str(exc),
             latency_ms=latency_ms,
