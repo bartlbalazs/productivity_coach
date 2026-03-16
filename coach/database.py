@@ -307,6 +307,28 @@ def end_session(session_id: int) -> None:
         )
 
 
+def reopen_session(session_id: int) -> None:
+    """Reopen a previously ended session so it can receive new check-ins.
+
+    Clears ``end_time``, ``stopping``, ``summary``, and ``summary_json`` so the
+    session is treated as open again and the scheduler heartbeat guard
+    (``AND end_time IS NULL``) passes.  The summary will be regenerated when
+    the session is stopped again.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE sessions
+               SET end_time     = NULL,
+                   stopping     = 0,
+                   summary      = NULL,
+                   summary_json = NULL
+             WHERE id = ?
+            """,
+            (session_id,),
+        )
+
+
 def mark_session_stopping(session_id: int) -> None:
     """Flag a session as stopping so auto-resume will not pick it up."""
     with _get_conn() as conn:
@@ -532,6 +554,32 @@ def get_open_session_with_live_lock() -> Optional[Session]:
         id=row["id"],
         start_time=_parse_dt(row["start_time"]),
         end_time=None,
+        goal=row["goal"],
+    )
+
+
+def get_latest_closed_session() -> Optional[Session]:
+    """Return the most recently ended session, or None if no sessions exist.
+
+    Used to offer a *Resume last session* button next to *Start* when the
+    user has stopped a session normally and might want to continue it.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, start_time, end_time, goal FROM sessions
+             WHERE end_time IS NOT NULL
+             ORDER BY end_time DESC
+             LIMIT 1
+            """,
+        ).fetchone()
+
+    if row is None:
+        return None
+    return Session(
+        id=row["id"],
+        start_time=_parse_dt(row["start_time"]),
+        end_time=_parse_dt(row["end_time"]),
         goal=row["goal"],
     )
 

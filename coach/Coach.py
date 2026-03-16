@@ -30,6 +30,7 @@ from coach.config import config
 from coach.database import (
     SessionLogEntry,
     get_all_captures_for_session,
+    get_latest_closed_session,
     get_or_cleanup_open_session,
     init_db,
 )
@@ -39,6 +40,7 @@ from coach.core.session_controller import (
     auto_resume_if_needed,
     drain_event_queue,
     finish_task,
+    resume_latest_session,
     resume_open_session,
     set_current_focus,
     start_monitoring,
@@ -230,7 +232,7 @@ def _render_session_log() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _render_controls(open_session=None) -> None:
+def _render_controls(open_session=None, latest_closed_session=None) -> None:
     """Start / Pause / Resume-session / Stop buttons in the sidebar."""
     is_monitoring = st.session_state["monitoring"]
     is_paused = st.session_state.get("paused", False)
@@ -269,15 +271,45 @@ def _render_controls(open_session=None) -> None:
             goal_text = f" — {open_session.goal}" if open_session.goal else ""
             st.caption(f"Session from {ts}{goal_text} is ready to resume.")
         else:
-            if st.button(
-                "Start",
-                disabled=bool(errors),
-                width="stretch",
-                type="primary",
-                key="ctrl_start",
-            ):
-                start_monitoring()
-                st.rerun()
+            if latest_closed_session is not None:
+                col_start, col_resume = st.columns(2)
+                with col_start:
+                    if st.button(
+                        "Start",
+                        disabled=bool(errors),
+                        width="stretch",
+                        type="secondary",
+                        key="ctrl_start",
+                    ):
+                        start_monitoring()
+                        st.rerun()
+                with col_resume:
+                    if st.button(
+                        "Resume",
+                        disabled=bool(errors),
+                        width="stretch",
+                        type="primary",
+                        key="ctrl_resume_closed",
+                    ):
+                        resume_latest_session()
+                        st.rerun()
+                ts = latest_closed_session.start_time.strftime("%H:%M")
+                goal_text = (
+                    f" — {latest_closed_session.goal}"
+                    if latest_closed_session.goal
+                    else ""
+                )
+                st.caption(f"Resume session from {ts}{goal_text}")
+            else:
+                if st.button(
+                    "Start",
+                    disabled=bool(errors),
+                    width="stretch",
+                    type="primary",
+                    key="ctrl_start",
+                ):
+                    start_monitoring()
+                    st.rerun()
     else:
         # Monitoring Active - Pause/Stop controls
         pause_disabled = is_analysing
@@ -334,11 +366,12 @@ def _sidebar_fragment() -> None:
 
     is_monitoring = st.session_state["monitoring"]
 
-    # Read open_session from session_state — it is written by _main_ui_loop
-    # each render cycle so we avoid a duplicate DB call here.
+    # Read open_session and latest_closed_session from session_state — written
+    # by _main_ui_loop each render cycle so we avoid a duplicate DB call here.
     open_session = st.session_state.get("open_session")
+    latest_closed_session = st.session_state.get("latest_closed_session")
 
-    _render_controls(open_session)
+    _render_controls(open_session, latest_closed_session)
 
     if is_monitoring and st.session_state.get("session_id"):
         render_session_stats()
@@ -681,6 +714,14 @@ def _main_ui_loop() -> None:
     # Also stored in session_state so _sidebar_fragment can read it without a second DB hit.
     open_session = get_or_cleanup_open_session() if not is_monitoring else None
     st.session_state["open_session"] = open_session
+    # Fetch the latest stopped session for the "Resume last session" button.
+    # Only needed when not monitoring and no open session is pending.
+    latest_closed_session = (
+        get_latest_closed_session()
+        if not is_monitoring and open_session is None
+        else None
+    )
+    st.session_state["latest_closed_session"] = latest_closed_session
 
     # Two-column layout: mode banner + main content on the left; current focus
     # and task list on the right.

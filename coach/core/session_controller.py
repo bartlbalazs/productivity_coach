@@ -27,12 +27,14 @@ from coach.database import (
     end_session,
     force_claim_session_scheduler,
     get_latest_capture_for_session,
+    get_latest_closed_session,
     get_open_session_with_live_lock,
     get_or_cleanup_open_session,
     get_session_log,
     get_session_tasks,
     mark_session_stopping,
     mark_task_done,
+    reopen_session,
     replace_session_tasks,
     reset_stale_stopping_sessions,
     save_session_summary,
@@ -486,6 +488,27 @@ def resume_open_session() -> None:
         "Resume button: starting fresh scheduler for session %d.", open_session.id
     )
     resume_monitoring(open_session.id, open_session.goal, open_session.start_time)
+
+
+def resume_latest_session() -> None:
+    """Reopen the most recently stopped session and resume monitoring it.
+
+    Clears the session's ``end_time`` (and summary) in the DB so it is treated
+    as an open session again, then hands off to ``resume_monitoring`` which
+    starts a fresh scheduler thread and restores all UI state (log, tasks,
+    last coaching result).
+
+    Does nothing if no closed session exists.
+    """
+    session = get_latest_closed_session()
+    if session is None:
+        logger.info("resume_latest_session: no closed session found.")
+        return
+    logger.info(
+        "Reopening stopped session %d (goal=%r) for resume.", session.id, session.goal
+    )
+    reopen_session(session.id)
+    resume_monitoring(session.id, session.goal, session.start_time)
 
 
 def auto_resume_if_needed() -> None:
