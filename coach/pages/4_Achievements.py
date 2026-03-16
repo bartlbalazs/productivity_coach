@@ -55,7 +55,11 @@ earned = len(unlocked)
 
 with st.sidebar:
     st.title("Productivity Coach")
-    st.caption("Achievements")
+    st.caption(
+        "Browse the gamified categories to track your unlocked badges and monitor your progress "
+        "bars for long-term milestones. Check the bottom of the page to discover your next closest "
+        "unlockable achievement to help maintain your momentum."
+    )
     st.divider()
 
     # overall progress ring / bar
@@ -108,9 +112,8 @@ with st.sidebar:
 
 st.title("🏅 Achievements")
 st.caption(
-    "Browse the gamified categories to track your unlocked badges and monitor your progress "
-    "bars for long-term milestones. Check the bottom of the page to discover your next closest "
-    "unlockable achievement to help maintain your momentum."
+    "Every badge is earned — no shortcuts. Keep showing up, keep shipping, keep recovering. "
+    "Your consistency is the product."
 )
 
 # Motivational headline bar

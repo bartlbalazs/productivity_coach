@@ -117,7 +117,12 @@ sessions_with_data = [s for s in all_stats if s["total_captures"] > 0]
 
 with st.sidebar:
     st.title("Productivity Coach")
-    st.caption("Session Insights")
+    st.caption(
+        "Select a specific session from the sidebar to dive into detailed timelines of your "
+        "focus trends, input activity (keystrokes/clicks), and distraction breakdowns. From here, "
+        "you can also generate or review an AI-driven session summary to evaluate your peak "
+        "periods and get actionable insights for tomorrow."
+    )
     st.divider()
 
     if not sessions_with_data:
@@ -187,12 +192,6 @@ avg_break_quality = (
 # ---------------------------------------------------------------------------
 
 st.title("Session Insights")
-st.caption(
-    "Select a specific session from the sidebar to dive into detailed timelines of your "
-    "focus trends, input activity (keystrokes/clicks), and distraction breakdowns. From here, "
-    "you can also generate or review an AI-driven session summary to evaluate your peak "
-    "periods and get actionable insights for tomorrow."
-)
 
 headline = (
     summary.headline

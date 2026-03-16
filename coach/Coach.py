@@ -358,7 +358,12 @@ def _render_controls(open_session=None, latest_closed_session=None) -> None:
 @st.fragment(run_every=1)
 def _sidebar_fragment() -> None:
     st.title("Coach")
-    st.caption("AI focus monitoring")
+    st.caption(
+        "Start or resume your monitoring session using the sidebar controls to receive "
+        "real-time focus scoring and coaching suggestions below. Use the **note field** "
+        "at the bottom right to add your next task(s) as free-text descriptions, or to "
+        "provide more details on your existing tasks for the coach."
+    )
     st.divider()
 
     st.page_link("pages/5_Settings.py", label="Settings", icon="⚙️")
@@ -728,12 +733,6 @@ def _main_ui_loop() -> None:
     main_col, right_col = st.columns([7, 3])
 
     with main_col:
-        st.caption(
-            "Start or resume your monitoring session using the sidebar controls to receive "
-            "real-time focus scoring and coaching suggestions below. Use the **note field** "
-            "at the bottom right to add your next task(s) as free-text descriptions, or to "
-            "provide more details on your existing tasks for the coach."
-        )
         render_mode_banner()
         _render_main_panel(open_session=open_session)
         render_errors()
