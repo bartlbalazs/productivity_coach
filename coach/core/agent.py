@@ -215,7 +215,7 @@ class AnalysisResult(BaseModel):
     suggested_next_interval: Optional[int] = Field(
         default=None,
         description=(
-            "Seconds until the next check-in. Range 60–600. "
+            "Seconds until the next check-in. Range 60–900. "
             "During FOCUS — SHORT (60–120s): mode just changed or focus is unstable; "
             "LONG (300–600s): deeply focused and steady mid-sprint. "
             "During REST — set this to the FULL break duration: "
@@ -224,7 +224,7 @@ class AnalysisResult(BaseModel):
             "Null = use the scheduler default."
         ),
         ge=60,
-        le=600,
+        le=900,
     )
     posture_correction: Optional[str] = Field(
         default=None,
@@ -272,6 +272,11 @@ class CycleState(TypedDict):
 
     # Populated by the capture node — true streak start from full session history
     true_streak_start: Optional[tuple[str, datetime]]
+    # Ordered list of completed sprint descriptions built from the full session
+    # history, e.g. ["Sprint 1: 25 min", "Sprint 2: 30 min"].  Used so the LLM
+    # always has the accurate total sprint count even when the context window
+    # does not cover the entire session.
+    sprint_summary: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +294,7 @@ Your tone is concise, commanding, and psychologically precise. Use urgency and i
 3.  **Long Rest:** 15 min after every 4th sprint. Non-negotiable for cognitive recovery. Set suggested_next_interval=900.
 *   **Switch to REST when:** Sprint is done (25m+) AND focus is declining, OR hard cap (40m) reached.
 *   **Switch to FOCUS when:** Rest time is up.
+*   **Long break trigger:** The session context will tell you "Completed FOCUS sprints this session: N". When N is a multiple of 4 (4, 8, 12…), the NEXT rest MUST be a long break (15 min, suggested_next_interval=900). The history summary will say "*** LONG BREAK IS NOW DUE ***" — honour it unconditionally.
 
 --- SENSORY INTELLIGENCE ---
 **CRITICAL:** IF DATA IS MISSING (e.g., "Webcam unavailable", "No Spotify data"), DO NOT HALLUCINATE IT. Ignore that sense entirely.
@@ -346,9 +352,45 @@ def count_completed_sprints(history: list[CaptureRecord]) -> int:
     return completed
 
 
+def build_sprint_summary(full_history: list[CaptureRecord]) -> list[str]:
+    """Build a list of completed FOCUS sprint descriptions from the full session history.
+
+    Each entry describes one completed sprint: its ordinal number and duration in
+    minutes, e.g. ``"Sprint 1: 28 min"``.
+
+    A sprint starts at the first FOCUS record of a FOCUS streak and ends at the
+    first REST record that follows it.  The duration is the elapsed time between
+    those two timestamps.
+
+    Args:
+        full_history: All captures for the session in *chronological* order
+            (oldest first).  ``get_all_captures_for_session`` returns this order.
+
+    Returns:
+        Ordered list of sprint description strings, e.g.
+        ``["Sprint 1: 25 min", "Sprint 2: 30 min"]``.
+        Returns an empty list when no sprints have been completed yet.
+    """
+    sprints: list[str] = []
+    sprint_start: Optional[datetime] = None
+
+    for rec in full_history:
+        if rec.mode_label == "FOCUS":
+            if sprint_start is None:
+                sprint_start = rec.timestamp
+        else:  # REST
+            if sprint_start is not None:
+                duration_min = int((rec.timestamp - sprint_start).total_seconds() / 60)
+                sprints.append(f"Sprint {len(sprints) + 1}: {duration_min} min")
+                sprint_start = None  # reset for next sprint
+
+    return sprints
+
+
 def _build_history_summary(
     history: list[CaptureRecord],
     true_streak_start: Optional[tuple[str, datetime]] = None,
+    sprint_summary: Optional[list[str]] = None,
 ) -> str:
     if not history:
         return "No previous observations this session — this is the first check-in."
@@ -390,16 +432,25 @@ def _build_history_summary(
         f"Pomodoro rules regardless of how many check-ins are visible above.]"
     )
 
-    # Count completed FOCUS sprints: each uninterrupted FOCUS→REST transition = 1 sprint
-    completed_sprints = count_completed_sprints(history)
-    if completed_sprints > 0:
+    # Sprint summary: derived from the full session history (not windowed) so the
+    # LLM always has the accurate total sprint count across the entire session.
+    completed_count = len(sprint_summary) if sprint_summary else 0
+    if completed_count > 0:
+        assert sprint_summary is not None
+        sprint_lines = ", ".join(sprint_summary)
+        long_break_due = completed_count > 0 and completed_count % 4 == 0
+        long_break_note = (
+            " *** LONG BREAK (15-20 min) IS NOW DUE — enforce it immediately. ***"
+            if long_break_due
+            else (f" Next long break after sprint {((completed_count // 4) + 1) * 4}.")
+        )
         lines.append(
-            f"Completed FOCUS sprints this session: {completed_sprints}. "
-            + (
-                "A long break (15–20 min) is due after the 4th sprint."
-                if completed_sprints >= 4 and completed_sprints % 4 == 0
-                else ""
-            )
+            f"Completed FOCUS sprints this session: {completed_count} "
+            f"({sprint_lines}).{long_break_note}"
+        )
+    else:
+        lines.append(
+            "Completed FOCUS sprints this session: 0 — no sprint finished yet."
         )
 
     return "\n".join(lines)
@@ -411,6 +462,7 @@ def _build_content_parts(
     session_goal: Optional[str] = None,
     true_streak_start: Optional[tuple[str, datetime]] = None,
     tasks_empty: bool = False,
+    sprint_summary: Optional[list[str]] = None,
 ) -> list:
     """Build the multimodal HumanMessage content list."""
     parts: list = []
@@ -427,7 +479,10 @@ def _build_content_parts(
         )
 
     parts.append(
-        {"type": "text", "text": _build_history_summary(history, true_streak_start)}
+        {
+            "type": "text",
+            "text": _build_history_summary(history, true_streak_start, sprint_summary),
+        }
     )
 
     if capture.has_webcam:
@@ -539,15 +594,21 @@ def capture_node(state: CycleState) -> dict:
         limit=config.history_context_size,
     )
 
+    # Fetch the full session history (all captures, oldest first) so we can
+    # build an accurate sprint summary that is not capped by the context window.
+    full_history = get_all_captures_for_session(state["session_id"])
+    sprint_summary = build_sprint_summary(full_history)
+
     # Fetch the true streak start from the full session history so the LLM
     # gets the accurate elapsed time even when the context window is shorter
     # than the actual streak (e.g. 40-minute unbroken FOCUS session).
     true_streak_start = get_mode_streak_start(state["session_id"])
 
     logger.info(
-        "Capture done. webcam=%s history_entries=%d streak=%s",
+        "Capture done. webcam=%s history_entries=%d sprints_completed=%d streak=%s",
         "ok" if capture.has_webcam else "unavailable",
         len(history),
+        len(sprint_summary),
         f"{true_streak_start[0]} since {true_streak_start[1].strftime('%H:%M')}"
         if true_streak_start
         else "none",
@@ -557,6 +618,7 @@ def capture_node(state: CycleState) -> dict:
         "capture": capture,
         "history": history,
         "true_streak_start": true_streak_start,
+        "sprint_summary": sprint_summary,
     }
 
 
@@ -581,6 +643,7 @@ def analyse_node(state: CycleState) -> dict:
                 state.get("session_goal"),
                 state.get("true_streak_start"),
                 tasks_empty=state.get("tasks_empty", False),
+                sprint_summary=state.get("sprint_summary"),
             )
         ),
     ]
@@ -1162,6 +1225,7 @@ def run_cycle(
         "timestamp": None,
         "true_streak_start": None,
         "completed_sprints": 0,
+        "sprint_summary": [],
     }
     final_state: CycleState = _compiled_graph.invoke(initial_state)  # type: ignore[assignment]
 
