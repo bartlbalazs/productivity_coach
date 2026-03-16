@@ -76,6 +76,12 @@ filtered = [s for s in all_stats if date_from <= s["start_time"].date() <= date_
 # ---------------------------------------------------------------------------
 
 st.title("Session History")
+st.caption(
+    "Filter by date range in the sidebar to review your past sessions, track your streaks, "
+    "and identify your optimal working hours using the scatter plot. You can also expand "
+    "individual sessions for a quick breakdown or generate an AI-powered weekly summary "
+    "to spot larger trends."
+)
 
 if not filtered:
     st.info("No sessions recorded in the selected date range.")

@@ -46,6 +46,11 @@ st.title("Settings")
 # Navigation back to home
 st.page_link("Coach.py", label="Back to Dashboard", icon="🏠")
 st.divider()
+st.caption(
+    "Adjust your monitoring intervals, sound alerts, and AI model preferences in the left column. "
+    "Use the right column to authenticate and manage external integrations like Spotify and "
+    "Fitbit to give the coach deeper context."
+)
 
 col1, col2 = st.columns(2)
 

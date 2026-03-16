@@ -108,8 +108,9 @@ with st.sidebar:
 
 st.title("🏅 Achievements")
 st.caption(
-    "Every badge is earned — no shortcuts. Keep showing up, keep shipping, keep recovering. "
-    "Your consistency is the product."
+    "Browse the gamified categories to track your unlocked badges and monitor your progress "
+    "bars for long-term milestones. Check the bottom of the page to discover your next closest "
+    "unlockable achievement to help maintain your momentum."
 )
 
 # Motivational headline bar
