@@ -12,13 +12,15 @@ from coach.ui.sounds import set_muted, set_volume
 
 def persist_sound_prefs() -> None:
     """Save current sound/TTS settings from session state to disk."""
-    save_prefs(
+    existing = load_prefs()
+    existing.update(
         {
             "sound_muted": st.session_state.get("sound_muted", False),
             "sound_volume": st.session_state.get("sound_volume", 0.7),
             "tts_enabled": st.session_state.get("tts_enabled", True),
         }
     )
+    save_prefs(existing)
 
 
 def init_state() -> None:

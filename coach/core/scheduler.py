@@ -135,8 +135,12 @@ class MonitoringScheduler:
         owner_token: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
-        self.interval_min = interval_min or config.capture_interval_min
-        self.interval_max = interval_max or config.capture_interval_max
+        self.interval_min = (
+            interval_min if interval_min is not None else config.capture_interval_min
+        )
+        self.interval_max = (
+            interval_max if interval_max is not None else config.capture_interval_max
+        )
         self.session_goal = session_goal
         self.on_event = on_event
         # Unique token identifying this scheduler instance as the DB lock holder

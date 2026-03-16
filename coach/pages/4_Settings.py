@@ -19,6 +19,7 @@ from coach.ui.components import (
     render_spotify_auth,
 )
 from coach.ui.utils import hide_streamlit_chrome
+from coach.core.session_state import init_state
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -32,6 +33,9 @@ st.set_page_config(
 )
 
 hide_streamlit_chrome()
+
+# Initialise session state so interval sliders have their keys populated
+init_state()
 
 # ---------------------------------------------------------------------------
 # Page content — executed directly by Streamlit's multipage runner

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from collections import Counter
 from datetime import timedelta
@@ -197,7 +198,7 @@ headline = (
 if headline:
     st.markdown(
         f"<div style='font-size:1.1rem; color:#ccc; margin-bottom:0.8rem;'>"
-        f"{headline}</div>",
+        f"{html.escape(headline)}</div>",
         unsafe_allow_html=True,
     )
 
@@ -257,7 +258,7 @@ if not spans_df.empty:
         )
         .properties(height=80)
     )
-    st.altair_chart(band_chart, width="stretch")
+    st.altair_chart(band_chart, use_container_width=True)
 else:
     st.caption("Not enough data for timeline.")
 
@@ -299,7 +300,7 @@ if summary:
                 st.markdown(
                     f"<div style='padding:0.3rem 0.6rem; margin-bottom:0.3rem; "
                     f"background:rgba(231,76,60,0.12); border-left:3px solid {_RED}; "
-                    f"border-radius:4px; font-size:0.9rem;'>{item}</div>",
+                    f"border-radius:4px; font-size:0.9rem;'>{html.escape(item)}</div>",
                     unsafe_allow_html=True,
                 )
 else:
@@ -388,7 +389,7 @@ rule = (
 )
 
 st.altair_chart(
-    (focus_line + focus_points + rule).properties(height=260), width="stretch"
+    (focus_line + focus_points + rule).properties(height=260), use_container_width=True
 )
 
 # HR overlay — shown beneath the focus timeline when Fitbit data is available
@@ -463,7 +464,7 @@ if hr_captures:
     else:
         hr_chart = (hr_line + hr_points).properties(height=180)
 
-    st.altair_chart(hr_chart, width="stretch")
+    st.altair_chart(hr_chart, use_container_width=True)
 
 st.divider()
 
@@ -515,7 +516,7 @@ if total_s > 0:
         )
         .properties(height=100)
     )
-    st.altair_chart(breakdown_bar, width="stretch")
+    st.altair_chart(breakdown_bar, use_container_width=True)
 
     col_f, col_r = st.columns(2)
     col_f.metric(
@@ -578,7 +579,7 @@ if bq_captures:
         )
         .properties(height=160)
     )
-    st.altair_chart(bq_bars, width="stretch")
+    st.altair_chart(bq_bars, use_container_width=True)
     st.divider()
 
 # ---------------------------------------------------------------------------
@@ -616,7 +617,7 @@ if distraction_cats:
         )
         .properties(height=180)
     )
-    st.altair_chart(dist_bar, width="stretch")
+    st.altair_chart(dist_bar, use_container_width=True)
     st.divider()
 
 # ---------------------------------------------------------------------------
@@ -663,7 +664,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            width="stretch",
+            use_container_width=True,
         )
 
     with ia2:
@@ -681,7 +682,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            width="stretch",
+            use_container_width=True,
         )
 
     with ia3:
@@ -701,7 +702,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            width="stretch",
+            use_container_width=True,
         )
 
     st.divider()
@@ -717,7 +718,7 @@ if session_log:
         st.markdown(
             f"<div style='padding:0.3rem 0; border-bottom:1px solid #2a2a2a; font-size:0.9rem;'>"
             f"<span style='color:#888; font-size:0.8rem; margin-right:0.8rem;'>{ts}</span>"
-            f"{entry.note}</div>",
+            f"{html.escape(entry.note)}</div>",
             unsafe_allow_html=True,
         )
     st.divider()
@@ -750,7 +751,7 @@ log_df = pd.DataFrame(log_rows)
 
 st.dataframe(
     log_df,
-    width="stretch",
+    use_container_width=True,
     hide_index=True,
     column_config={
         "Score": st.column_config.NumberColumn(min_value=1, max_value=10),
@@ -848,7 +849,7 @@ else:
     )
     st.altair_chart(
         (focus_trend_line + focus_dots + avg_rule).properties(height=200),
-        width="stretch",
+        use_container_width=True,
     )
 
     # Focused % trend
@@ -889,5 +890,5 @@ else:
     )
     st.altair_chart(
         (pct_line + pct_dots + pct_rule).properties(height=200),
-        width="stretch",
+        use_container_width=True,
     )

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html as _html
 import json
 import logging
 import os
 import secrets
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -34,9 +36,11 @@ _AUTH_TIMEOUT = 60
 # (steps, sleep, HRV — fetched on cycle 0, then every N cycles)
 _SLOW_METRIC_INTERVAL = 5
 
-# Module-level cycle counter and cached slow data (reset on new auth)
+# Module-level cycle counter and cached slow data (reset on new auth).
+# Protected by _slow_data_lock for thread safety.
 _cycle_count: int = 0
 _slow_data_cache: Optional[_SlowMetrics] = None
+_slow_data_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -87,11 +91,24 @@ def _load_token() -> Optional[dict]:
 
 
 def _save_token(token: dict) -> None:
-    """Persist a token dict to disk."""
+    """Persist a token dict to disk atomically with owner-only permissions (0o600)."""
     path = _token_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(token, f)
+    dir_path = os.path.dirname(path)
+    os.makedirs(dir_path, exist_ok=True)
+    # Write to a temp file in the same directory, then rename atomically so a
+    # crash during write never leaves a truncated token file.
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".fitbit_token_")
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(token, f)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _refresh_token_if_needed(token: dict) -> Optional[dict]:
@@ -159,14 +176,24 @@ def is_configured() -> bool:
 
 
 def is_authenticated() -> bool:
-    """True if a valid (or auto-refreshable) cached token exists."""
+    """True if a valid (or auto-refreshable) cached token exists.
+
+    A token is considered valid when it has a refresh_token (so we can always
+    renew the access token) or when the access_token is still within its expiry
+    window.  A token that has only an expired access_token and no refresh_token
+    is treated as unauthenticated.
+    """
     if not is_configured():
         return False
     token = _load_token()
     if token is None:
         return False
-    # A refresh_token means we can always get a new access token
-    return bool(token.get("refresh_token") or token.get("access_token"))
+    # If we have a refresh_token we can always obtain a new access_token
+    if token.get("refresh_token"):
+        return True
+    # No refresh_token — only trust an access_token that is still valid
+    expires_at = token.get("expires_at", 0)
+    return bool(token.get("access_token")) and time.time() < expires_at - 60
 
 
 def get_auth_url() -> tuple[str, str, str]:
@@ -264,6 +291,11 @@ class AuthServer:
             def do_GET(self) -> None:  # noqa: N802
                 qs = parse_qs(urlparse(self.path).query)
 
+                def _shutdown_server() -> None:
+                    if auth_server_ref._server is not None:
+                        auth_server_ref._server.shutdown()
+                        auth_server_ref._server.server_close()
+
                 # Validate state to prevent CSRF
                 received_state = qs.get("state", [""])[0]
                 if received_state != auth_server_ref._expected_state:
@@ -271,10 +303,7 @@ class AuthServer:
                         "OAuth state mismatch — possible CSRF attempt."
                     )
                     self._respond("Authorization failed: state mismatch.")
-                    threading.Thread(
-                        target=auth_server_ref._server.shutdown,  # type: ignore[union-attr]
-                        daemon=True,
-                    ).start()
+                    threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code_list = qs.get("code")
@@ -282,10 +311,7 @@ class AuthServer:
                     error = qs.get("error", ["unknown"])[0]
                     auth_server_ref.error = f"Fitbit denied access: {error}"
                     self._respond("Authorization failed.")
-                    threading.Thread(
-                        target=auth_server_ref._server.shutdown,  # type: ignore[union-attr]
-                        daemon=True,
-                    ).start()
+                    threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code = code_list[0]
@@ -299,10 +325,16 @@ class AuthServer:
                 except Exception as exc:
                     auth_server_ref.error = str(exc)
                     logger.warning("Fitbit token exchange failed: %s", exc)
-                    self._respond(f"Authorization error: {exc}")
+                    self._respond(f"Authorization error: {_html.escape(str(exc))}")
                 finally:
+
+                    def _shutdown_and_close(srv: HTTPServer) -> None:
+                        srv.shutdown()
+                        srv.server_close()
+
                     threading.Thread(
-                        target=auth_server_ref._server.shutdown,  # type: ignore[union-attr]
+                        target=_shutdown_and_close,
+                        args=(auth_server_ref._server,),  # type: ignore[union-attr]
                         daemon=True,
                     ).start()
 
@@ -346,6 +378,7 @@ class AuthServer:
             self.timed_out = True
             logger.info("Fitbit OAuth callback timed out after %ds.", _AUTH_TIMEOUT)
             self._server.shutdown()
+            self._server.server_close()
 
     @property
     def is_pending(self) -> bool:
@@ -394,23 +427,54 @@ def _exchange_code_for_token(code: str, code_verifier: str) -> None:
 
 
 def _api_get(token: dict, path: str) -> Optional[dict]:
-    """Make an authenticated GET to the Fitbit API. Returns parsed JSON or None."""
-    access_token = token.get("access_token", "")
-    try:
-        resp = _requests.get(
-            f"https://api.fitbit.com{path}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=8,
-        )
-        if resp.status_code == 401:
-            # Token might be stale despite our check — log and bail
-            logger.warning("Fitbit API returned 401 for %s", path)
+    """Make an authenticated GET to the Fitbit API. Returns parsed JSON or None.
+
+    On 401 the token is refreshed and the request is retried once.
+    On 429 the Retry-After header is honoured (capped at 60 s).
+    """
+    for attempt in range(2):
+        access_token = token.get("access_token", "")
+        try:
+            resp = _requests.get(
+                f"https://api.fitbit.com{path}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=8,
+            )
+            if resp.status_code == 401:
+                if attempt == 0:
+                    # Token might be stale — force a refresh and retry once.
+                    logger.warning(
+                        "Fitbit API returned 401 for %s — refreshing token and retrying.",
+                        path,
+                    )
+                    refreshed = _refresh_token_if_needed(
+                        {**token, "expires_at": 0}  # force refresh by zeroing expiry
+                    )
+                    if refreshed is None:
+                        logger.warning("Fitbit token refresh failed after 401.")
+                        return None
+                    token = refreshed
+                    continue
+                logger.warning(
+                    "Fitbit API returned 401 for %s after token refresh.", path
+                )
+                return None
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", "60"))
+                wait = min(retry_after, 60)
+                logger.warning(
+                    "Fitbit API rate-limited (429) for %s — backing off %ds.",
+                    path,
+                    wait,
+                )
+                time.sleep(wait)
+                return None  # skip this cycle rather than blocking indefinitely
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            logger.debug("Fitbit API error for %s (silently ignored): %s", path, exc)
             return None
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        logger.debug("Fitbit API error for %s (silently ignored): %s", path, exc)
-        return None
+    return None
 
 
 def _fetch_heart_rate_now(token: dict) -> Optional[int]:
@@ -497,6 +561,10 @@ def get_current_health() -> Optional[FitbitData]:
 
     Rate-limit strategy: heart rate is fetched every cycle; steps, sleep,
     resting HR, and HRV are fetched every _SLOW_METRIC_INTERVAL cycles.
+
+    Thread safety: _cycle_count and _slow_data_cache are protected by
+    _slow_data_lock so concurrent callers from different threads cannot
+    corrupt state.
     """
     global _cycle_count, _slow_data_cache
 
@@ -508,16 +576,28 @@ def get_current_health() -> Optional[FitbitData]:
         return None
 
     try:
-        # Always fetch current heart rate
+        # Always fetch current heart rate (outside the lock — network call)
         heart_rate = _fetch_heart_rate_now(token)
 
-        # Fetch slow metrics on first call and every N cycles thereafter
-        if _slow_data_cache is None or _cycle_count % _SLOW_METRIC_INTERVAL == 0:
-            _slow_data_cache = _fetch_slow_metrics(token)
+        # Decide whether to refresh slow metrics (lock only for the decision + update)
+        with _slow_data_lock:
+            need_refresh = (
+                _slow_data_cache is None or _cycle_count % _SLOW_METRIC_INTERVAL == 0
+            )
+            current_count = _cycle_count
 
-        _cycle_count += 1
+        if need_refresh:
+            new_slow = _fetch_slow_metrics(token)
+            with _slow_data_lock:
+                _slow_data_cache = new_slow
 
-        slow = _slow_data_cache
+        with _slow_data_lock:
+            _cycle_count += 1
+            slow = _slow_data_cache
+
+        if slow is None:
+            return None
+
         return FitbitData(
             heart_rate=heart_rate,
             resting_hr=slow.resting_hr,

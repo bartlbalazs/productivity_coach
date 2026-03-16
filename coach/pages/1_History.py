@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -157,7 +158,10 @@ col_s1.metric(
     "Current Streak",
     f"{streaks['current_streak']} day{'s' if streaks['current_streak'] != 1 else ''}",
 )
-col_s2.metric("Longest Streak", f"{streaks['longest_streak']} days")
+col_s2.metric(
+    "Longest Streak",
+    f"{streaks['longest_streak']} day{'s' if streaks['longest_streak'] != 1 else ''}",
+)
 col_s3.metric("Total Sessions", streaks["total_sessions"])
 col_s4.metric("Total Check-ins", streaks["total_captures"])
 col_s5.metric(
@@ -324,6 +328,13 @@ st.divider()
 
 st.subheader("Sessions")
 
+# Pre-fetch captures for all filtered sessions to avoid N+1 DB queries.
+_captures_cache: dict[int, list] = {
+    s["id"]: get_all_captures_for_session(s["id"])
+    for s in filtered
+    if s["total_captures"] > 0
+}
+
 for s in filtered:
     start_str = s["start_time"].strftime("%a %b %d, %Y  %H:%M")
     duration = fmt_duration_between(s["start_time"], s["end_time"])
@@ -347,12 +358,12 @@ for s in filtered:
         if goal_text:
             st.markdown(
                 f"<div style='color:#aaa; font-size:0.9rem; margin-bottom:0.6rem;'>"
-                f"{goal_label}: {goal_text}</div>",
+                f"{goal_label}: {html.escape(goal_text)}</div>",
                 unsafe_allow_html=True,
             )
 
         if s["total_captures"] > 0:
-            captures = get_all_captures_for_session(s["id"])
+            captures = _captures_cache.get(s["id"], [])
 
             # Mini focus timeline — X-axis uses real datetime so points are
             # spread proportionally across the session duration.
@@ -418,7 +429,7 @@ else:
                     f"rgba(74,144,217,0.3); border-radius:10px; padding:1.2rem 1.8rem; "
                     f"margin-bottom:1rem;'>"
                     f"<div style='font-size:1.2rem; font-weight:700; color:#4a90d9; "
-                    f"margin-bottom:0.8rem;'>{summary.headline}</div>"
+                    f"margin-bottom:0.8rem;'>{html.escape(summary.headline)}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -438,7 +449,7 @@ else:
                             f"<div style='background:rgba(255,255,255,0.04); "
                             f"border-left:3px solid #4a90d9; padding:0.5rem 0.9rem; "
                             f"border-radius:4px; margin-bottom:0.4rem; font-size:0.92rem; "
-                            f"color:#ccc;'>{p}</div>",
+                            f"color:#ccc;'>{html.escape(p)}</div>",
                             unsafe_allow_html=True,
                         )
             except Exception as exc:

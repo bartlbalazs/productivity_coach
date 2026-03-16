@@ -8,6 +8,7 @@ lives here — mutations are delegated to ``session_controller``.
 from __future__ import annotations
 
 import csv
+import html as _html
 import io
 from datetime import datetime, timezone
 from typing import Optional
@@ -225,7 +226,7 @@ def render_session_stats() -> None:
             data=csv_bytes,
             file_name=f"session_{session_id}.csv",
             mime="text/csv",
-            width="stretch",
+            use_container_width=True,
         )
 
 
@@ -403,7 +404,7 @@ def render_task_list() -> None:
         with col_text:
             st.markdown(
                 f"<div style='padding:0.4rem 0; font-size:0.9rem; color:#e8e8e8; "
-                f"border-bottom:1px solid #2a2a2a;'>{task.text}</div>",
+                f"border-bottom:1px solid #2a2a2a;'>{_html.escape(task.text)}</div>",
                 unsafe_allow_html=True,
             )
         with col_focus:
@@ -424,7 +425,7 @@ def render_task_list() -> None:
         for task in reversed(done_tasks):
             st.markdown(
                 f"<div style='padding:0.3rem 0; font-size:0.85rem; "
-                f"color:#444; text-decoration:line-through;'>{task.text}</div>",
+                f"color:#444; text-decoration:line-through;'>{_html.escape(task.text)}</div>",
                 unsafe_allow_html=True,
             )
 
@@ -453,7 +454,9 @@ def render_spotify_auth() -> None:
     auth_server: Optional[AuthServer] = st.session_state.get("spotify_auth_server")
 
     if auth_server is None:
-        if st.button("Connect Spotify", key="spotify_connect", width="stretch"):
+        if st.button(
+            "Connect Spotify", key="spotify_connect", use_container_width=True
+        ):
             st.session_state["spotify_auth_server"] = start_auth_server()
             st.rerun()
         return
@@ -476,7 +479,7 @@ def render_spotify_auth() -> None:
 
     st.link_button(
         "Authorize on Spotify",
-        url=get_auth_url(),
+        url=get_auth_url(state=auth_server._expected_state),
         help="Opens Spotify login in a new tab. After authorizing, return here.",
     )
     st.caption("Waiting for authorization... (60 s)")
@@ -506,7 +509,7 @@ def render_fitbit_auth() -> None:
     auth_server: Optional[FitbitAuthServer] = st.session_state.get("fitbit_auth_server")
 
     if auth_server is None:
-        if st.button("Connect Fitbit", key="fitbit_connect", width="stretch"):
+        if st.button("Connect Fitbit", key="fitbit_connect", use_container_width=True):
             st.session_state["fitbit_auth_server"] = fitbit_start_auth_server()
             st.rerun()
         return
@@ -707,7 +710,7 @@ def render_score_header(
                 f"<span style='background:rgba(255,255,255,0.08); color:#aaa; "
                 f"font-size:0.75rem; font-weight:600; padding:2px 8px; "
                 f"border-radius:10px; margin-left:0.6rem; "
-                f"letter-spacing:0.03em;'>{result.activity_label}</span>"  # type: ignore[attr-defined]
+                f"letter-spacing:0.03em;'>{_html.escape(result.activity_label)}</span>"  # type: ignore[attr-defined]
             )
         distraction_html = ""
         if result.distraction_category:  # type: ignore[attr-defined]
@@ -729,7 +732,7 @@ def render_score_header(
         )
         st.markdown(
             f"<div style='color:#aaa; font-size:0.9rem; margin-top:0.3rem;'>"
-            f"{result.activity_description}</div>",  # type: ignore[attr-defined]
+            f"{_html.escape(result.activity_description)}</div>",  # type: ignore[attr-defined]
             unsafe_allow_html=True,
         )
     with col_next:
@@ -755,7 +758,7 @@ def render_coaching_card(result: object, accent: str, bg: str, border: str) -> N
         f"background:{bg}; border:1px solid {border}; border-radius:10px; "
         f"padding:1.4rem 2rem; text-align:center; margin-bottom:1.4rem;'>"
         f"<div style='font-size:1.35rem; font-weight:700; color:{accent}; "
-        f"line-height:1.4;'>{result.instruction}</div>"  # type: ignore[attr-defined]
+        f"line-height:1.4;'>{_html.escape(result.instruction)}</div>"  # type: ignore[attr-defined]
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -774,7 +777,7 @@ def render_posture_callout(correction: str) -> None:
         f"<div style='font-size:0.8rem; font-weight:700; color:#1abc9c; "
         f"letter-spacing:0.06em; margin-bottom:0.3rem;'>POSTURE</div>"
         f"<div style='font-size:0.95rem; color:#d0f0ea; line-height:1.5;'>"
-        f"{correction}</div>"
+        f"{_html.escape(correction)}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -787,6 +790,8 @@ def render_posture_callout(correction: str) -> None:
 
 def render_suggestion_cards(suggestions: list[str], border: str) -> None:
     """Render suggestion cards in a column grid."""
+    if not suggestions:
+        return
     cols = st.columns(len(suggestions))
     for col, sug in zip(cols, suggestions):
         with col:
@@ -796,7 +801,7 @@ def render_suggestion_cards(suggestions: list[str], border: str) -> None:
                 f"padding:0.8rem 1rem; text-align:center; "
                 f"font-size:0.95rem; font-weight:600; color:#e0e0e0; "
                 f"background:rgba(255,255,255,0.03); height:100%;'>"
-                f"→ {sug}"
+                f"→ {_html.escape(sug)}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -812,7 +817,7 @@ def render_capture_expander(capture: object) -> None:
     st.divider()
     with st.expander("Latest capture", expanded=False):
         if capture.has_webcam:  # type: ignore[attr-defined]
-            st.image(capture.webcam_bytes, width="stretch")  # type: ignore[attr-defined]
+            st.image(capture.webcam_bytes, use_container_width=True)  # type: ignore[attr-defined]
         else:
             st.warning(f"Webcam unavailable: {capture.webcam_error}")  # type: ignore[attr-defined]
 

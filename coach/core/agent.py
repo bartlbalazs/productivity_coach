@@ -631,7 +631,9 @@ def analyse_node(state: CycleState) -> dict:
     history: list[CaptureRecord] = state["history"]
     session_id: int = state["session_id"]
 
-    structured_llm = _get_llm(temperature=0.3).with_structured_output(AnalysisResult)
+    structured_llm = _get_llm(temperature=0.3).with_structured_output(
+        AnalysisResult, include_raw=True
+    )
 
     messages = [
         SystemMessage(content=_SYSTEM_PROMPT),
@@ -661,14 +663,15 @@ def analyse_node(state: CycleState) -> dict:
                 attempt + 1,
                 max_retries + 1,
             )
-            result: AnalysisResult = structured_llm.invoke(messages)  # type: ignore[assignment]
+            raw_output = structured_llm.invoke(messages)
+            result: AnalysisResult = raw_output["parsed"]  # type: ignore[index]
+            tok_in, tok_out = _extract_usage(raw_output.get("raw"))  # type: ignore[union-attr]
             latency_ms = int((time.perf_counter() - t0) * 1000)
             logger.info(
                 "Analysis complete: focus_score=%d, mode=%s",
                 result.focus_score,
                 result.mode,
             )
-            tok_in, tok_out = None, None
             save_llm_call(
                 call_type="analyse",
                 model=config.model,
@@ -763,10 +766,11 @@ def persist_node(state: CycleState) -> dict:
     logger.info(
         "Persisted capture record id=%d for session %d.", record_id, state["session_id"]
     )
-    # Use the full-session sprint_summary (already computed from complete history
-    # in capture_node) rather than re-counting from the windowed history slice,
-    # which would undercount sprints in long sessions.
-    sprints = len(state.get("sprint_summary") or [])
+    # Re-fetch sprint summary from DB *after* save_capture() so the current record
+    # is included. The capture_node version was built before this record existed, so
+    # a REST record that closes a FOCUS streak would be off by one sprint.
+    updated_history = get_all_captures_for_session(state["session_id"])
+    sprints = len(build_sprint_summary(updated_history))
     return {
         "record_id": record_id,
         "timestamp": datetime.now(timezone.utc),
@@ -1195,7 +1199,15 @@ def _build_graph() -> StateGraph:
     return graph
 
 
-_compiled_graph = _build_graph().compile()
+_compiled_graph = None
+
+
+def _get_compiled_graph():
+    """Return the compiled LangGraph, building it lazily on first call."""
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = _build_graph().compile()
+    return _compiled_graph
 
 
 # ---------------------------------------------------------------------------
@@ -1242,7 +1254,7 @@ def run_cycle(
         "completed_sprints": 0,
         "sprint_summary": [],
     }
-    final_state: CycleState = _compiled_graph.invoke(initial_state)  # type: ignore[assignment]
+    final_state: CycleState = _get_compiled_graph().invoke(initial_state)  # type: ignore[assignment]
 
     if final_state.get("result") is None:
         raise RuntimeError("Cycle graph completed without an AnalysisResult.")

@@ -11,7 +11,6 @@ import streamlit as st
 from coach.database import (
     LlmCallRecord,
     get_llm_calls,
-    get_llm_calls_stats,
     get_all_sessions_stats,
     init_db,
 )
@@ -85,7 +84,19 @@ records = get_llm_calls(session_id=selected_session_id, limit=500)
 if selected_type != "All types":
     records = [r for r in records if r.call_type == selected_type]
 
-stats = get_llm_calls_stats(session_id=selected_session_id)
+# Compute stats from the filtered records so the banner always reflects the
+# current filter, not the unfiltered DB totals.
+_total_input = sum(r.token_input or 0 for r in records)
+_total_output = sum(r.token_output or 0 for r in records)
+_latencies = [r.latency_ms for r in records if r.latency_ms is not None]
+_errors = sum(1 for r in records if r.error)
+stats = {
+    "total_calls": len(records),
+    "total_input": _total_input or None,
+    "total_output": _total_output or None,
+    "avg_latency_ms": (sum(_latencies) / len(_latencies)) if _latencies else None,
+    "error_count": _errors,
+}
 
 # ---------------------------------------------------------------------------
 # Header + summary stats

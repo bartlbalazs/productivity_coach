@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html as _html
 import logging
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -110,9 +112,15 @@ def is_authenticated() -> bool:
     return result
 
 
-def get_auth_url() -> str:
+def get_auth_url(state: str = "") -> str:
     """Return the Spotify authorization URL the user must open in their browser."""
-    return _get_auth_manager().get_authorize_url()
+    mgr = _get_auth_manager()
+    url = mgr.get_authorize_url()
+    if state:
+        # Append state parameter for CSRF protection
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}state={state}"
+    return url
 
 
 def disconnect() -> None:
@@ -154,10 +162,14 @@ class AuthServer:
         self.error: Optional[str] = None
         self._server: Optional[HTTPServer] = None
         self._started_at: float = time.monotonic()
+        self._expected_state: str = ""
 
     def start(self) -> None:
         """Start the HTTP server and timeout watchdog in daemon threads."""
         from coach.config import config
+
+        # Generate CSRF state token
+        self._expected_state = secrets.token_urlsafe(16)
 
         # Parse port from redirect_uri (default 8765)
         parsed = urlparse(config.spotify_redirect_uri)
@@ -168,16 +180,29 @@ class AuthServer:
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 qs = parse_qs(urlparse(self.path).query)
+
+                def _shutdown_server() -> None:
+                    if auth_server_ref._server is not None:
+                        auth_server_ref._server.shutdown()
+                        auth_server_ref._server.server_close()
+
+                # Validate state to prevent CSRF
+                received_state = qs.get("state", [""])[0]
+                if received_state != auth_server_ref._expected_state:
+                    auth_server_ref.error = (
+                        "OAuth state mismatch — possible CSRF attempt."
+                    )
+                    self._respond("Authorization failed: state mismatch.")
+                    threading.Thread(target=_shutdown_server, daemon=True).start()
+                    return
+
                 code_list = qs.get("code")
                 if not code_list:
                     # Redirect without code (e.g. error=access_denied)
                     error = qs.get("error", ["unknown"])[0]
                     auth_server_ref.error = f"Spotify denied access: {error}"
                     self._respond("Authorization failed.")
-                    threading.Thread(
-                        target=auth_server_ref._server.shutdown,  # type: ignore[union-attr]
-                        daemon=True,
-                    ).start()
+                    threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code = code_list[0]
@@ -193,12 +218,9 @@ class AuthServer:
                 except Exception as exc:
                     auth_server_ref.error = str(exc)
                     logger.warning("Spotify token exchange failed: %s", exc)
-                    self._respond(f"Authorization error: {exc}")
+                    self._respond(f"Authorization error: {_html.escape(str(exc))}")
                 finally:
-                    threading.Thread(
-                        target=auth_server_ref._server.shutdown,  # type: ignore[union-attr]
-                        daemon=True,
-                    ).start()
+                    threading.Thread(target=_shutdown_server, daemon=True).start()
 
             def _respond(self, message: str) -> None:
                 body = (
@@ -240,6 +262,7 @@ class AuthServer:
             self.timed_out = True
             logger.info("Spotify OAuth callback timed out after %ds.", _AUTH_TIMEOUT)
             self._server.shutdown()
+            self._server.server_close()
 
     @property
     def is_pending(self) -> bool:
