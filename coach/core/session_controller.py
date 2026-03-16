@@ -98,9 +98,12 @@ def _handle_cycle_complete_event(event: CycleCompleteEvent) -> None:
     new_mode = event.result.mode
     prev_mode = prev_result.mode if prev_result is not None else None
     if new_mode != prev_mode:
+        scheduler: Optional[MonitoringScheduler] = st.session_state.get("scheduler")
         if new_mode == UserMode.FOCUS:
             play_focus_mode()
             st.session_state["rest_ends_at"] = None
+            if scheduler is not None:
+                scheduler.set_rest_ends_at(None)
         else:
             play_rest_mode()
             completed_sprints = getattr(event, "completed_sprints", 0)
@@ -111,9 +114,10 @@ def _handle_cycle_complete_event(event: CycleCompleteEvent) -> None:
             else:
                 min_rest_secs = 300  # 5 minutes — short break
             secs = max(event.result.suggested_next_interval or 0, min_rest_secs)
-            st.session_state["rest_ends_at"] = datetime.now(timezone.utc) + timedelta(
-                seconds=secs
-            )
+            rest_ends_at = datetime.now(timezone.utc) + timedelta(seconds=secs)
+            st.session_state["rest_ends_at"] = rest_ends_at
+            if scheduler is not None:
+                scheduler.set_rest_ends_at(rest_ends_at)
 
 
 def drain_event_queue() -> None:

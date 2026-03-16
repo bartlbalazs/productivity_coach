@@ -226,7 +226,7 @@ def render_session_stats() -> None:
             data=csv_bytes,
             file_name=f"session_{session_id}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -454,9 +454,7 @@ def render_spotify_auth() -> None:
     auth_server: Optional[AuthServer] = st.session_state.get("spotify_auth_server")
 
     if auth_server is None:
-        if st.button(
-            "Connect Spotify", key="spotify_connect", use_container_width=True
-        ):
+        if st.button("Connect Spotify", key="spotify_connect", width="stretch"):
             st.session_state["spotify_auth_server"] = start_auth_server()
             st.rerun()
         return
@@ -509,7 +507,7 @@ def render_fitbit_auth() -> None:
     auth_server: Optional[FitbitAuthServer] = st.session_state.get("fitbit_auth_server")
 
     if auth_server is None:
-        if st.button("Connect Fitbit", key="fitbit_connect", use_container_width=True):
+        if st.button("Connect Fitbit", key="fitbit_connect", width="stretch"):
             st.session_state["fitbit_auth_server"] = fitbit_start_auth_server()
             st.rerun()
         return
@@ -817,7 +815,7 @@ def render_capture_expander(capture: object) -> None:
     st.divider()
     with st.expander("Latest capture", expanded=False):
         if capture.has_webcam:  # type: ignore[attr-defined]
-            st.image(capture.webcam_bytes, use_container_width=True)  # type: ignore[attr-defined]
+            st.image(capture.webcam_bytes, width="stretch")  # type: ignore[attr-defined]
         else:
             st.warning(f"Webcam unavailable: {capture.webcam_error}")  # type: ignore[attr-defined]
 

@@ -277,6 +277,11 @@ class CycleState(TypedDict):
     # always has the accurate total sprint count even when the context window
     # does not cover the entire session.
     sprint_summary: list[str]
+    # True when the sprint count is a non-zero multiple of 4 AND a new FOCUS
+    # streak has already started after the long break.  Prevents the
+    # "LONG BREAK IS NOW DUE" prompt from re-firing on every check-in of the
+    # sprint that follows the long break.
+    long_break_served: bool
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +357,9 @@ def count_completed_sprints(history: list[CaptureRecord]) -> int:
     return completed
 
 
-def build_sprint_summary(full_history: list[CaptureRecord]) -> list[str]:
+def build_sprint_summary(
+    full_history: list[CaptureRecord],
+) -> tuple[list[str], bool]:
     """Build a list of completed FOCUS sprint descriptions from the full session history.
 
     Each entry describes one completed sprint: its ordinal number and duration in
@@ -367,9 +374,15 @@ def build_sprint_summary(full_history: list[CaptureRecord]) -> list[str]:
             (oldest first).  ``get_all_captures_for_session`` returns this order.
 
     Returns:
-        Ordered list of sprint description strings, e.g.
-        ``["Sprint 1: 25 min", "Sprint 2: 30 min"]``.
-        Returns an empty list when no sprints have been completed yet.
+        A tuple of:
+        - Ordered list of sprint description strings, e.g.
+          ``["Sprint 1: 25 min", "Sprint 2: 30 min"]``.
+          Returns an empty list when no sprints have been completed yet.
+        - ``long_break_served``: True when the sprint count is a non-zero multiple
+          of 4 **and** a new FOCUS streak has already started after the long break
+          (i.e. the most recent record in ``full_history`` is FOCUS).  This flag
+          prevents the ``"*** LONG BREAK IS NOW DUE ***"`` prompt from re-firing
+          on every check-in of the 5th (9th, 13th, …) sprint.
     """
     sprints: list[str] = []
     sprint_start: Optional[datetime] = None
@@ -384,13 +397,25 @@ def build_sprint_summary(full_history: list[CaptureRecord]) -> list[str]:
                 sprints.append(f"Sprint {len(sprints) + 1}: {duration_min} min")
                 sprint_start = None  # reset for next sprint
 
-    return sprints
+    # Determine whether the long break for the current 4-sprint boundary has
+    # already been served.  It has if: the sprint count is a non-zero multiple
+    # of 4 AND the most recent record in full_history is FOCUS (meaning the
+    # user has already re-entered a new sprint after the long break).
+    long_break_served = bool(
+        sprints
+        and len(sprints) % 4 == 0
+        and full_history
+        and full_history[-1].mode_label == "FOCUS"
+    )
+
+    return sprints, long_break_served
 
 
 def _build_history_summary(
     history: list[CaptureRecord],
     true_streak_start: Optional[tuple[str, datetime]] = None,
     sprint_summary: Optional[list[str]] = None,
+    long_break_served: bool = False,
 ) -> str:
     if not history:
         return "No previous observations this session — this is the first check-in."
@@ -437,7 +462,9 @@ def _build_history_summary(
     completed_count = len(sprint_summary) if sprint_summary else 0
     if completed_count > 0 and sprint_summary:
         sprint_lines = ", ".join(sprint_summary)
-        long_break_due = completed_count > 0 and completed_count % 4 == 0
+        long_break_due = (
+            completed_count > 0 and completed_count % 4 == 0 and not long_break_served
+        )
         long_break_note = (
             " *** LONG BREAK (15-20 min) IS NOW DUE — enforce it immediately. ***"
             if long_break_due
@@ -462,6 +489,7 @@ def _build_content_parts(
     true_streak_start: Optional[tuple[str, datetime]] = None,
     tasks_empty: bool = False,
     sprint_summary: Optional[list[str]] = None,
+    long_break_served: bool = False,
 ) -> list:
     """Build the multimodal HumanMessage content list."""
     parts: list = []
@@ -480,7 +508,9 @@ def _build_content_parts(
     parts.append(
         {
             "type": "text",
-            "text": _build_history_summary(history, true_streak_start, sprint_summary),
+            "text": _build_history_summary(
+                history, true_streak_start, sprint_summary, long_break_served
+            ),
         }
     )
 
@@ -596,7 +626,7 @@ def capture_node(state: CycleState) -> dict:
     # Fetch the full session history (all captures, oldest first) so we can
     # build an accurate sprint summary that is not capped by the context window.
     full_history = get_all_captures_for_session(state["session_id"])
-    sprint_summary = build_sprint_summary(full_history)
+    sprint_summary, long_break_served = build_sprint_summary(full_history)
 
     # Fetch the true streak start from the full session history so the LLM
     # gets the accurate elapsed time even when the context window is shorter
@@ -618,6 +648,7 @@ def capture_node(state: CycleState) -> dict:
         "history": history,
         "true_streak_start": true_streak_start,
         "sprint_summary": sprint_summary,
+        "long_break_served": long_break_served,
     }
 
 
@@ -645,6 +676,7 @@ def analyse_node(state: CycleState) -> dict:
                 state.get("true_streak_start"),
                 tasks_empty=state.get("tasks_empty", False),
                 sprint_summary=state.get("sprint_summary"),
+                long_break_served=state.get("long_break_served", False),
             )
         ),
     ]
@@ -1253,6 +1285,7 @@ def run_cycle(
         "true_streak_start": None,
         "completed_sprints": 0,
         "sprint_summary": [],
+        "long_break_served": False,
     }
     final_state: CycleState = _get_compiled_graph().invoke(initial_state)  # type: ignore[assignment]
 

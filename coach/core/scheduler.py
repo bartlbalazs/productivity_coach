@@ -154,6 +154,9 @@ class MonitoringScheduler:
         self._next_capture_at: Optional[datetime] = None
         # Adaptive interval: set by the last cycle's suggested_next_interval
         self._adaptive_interval: Optional[int] = None
+        # REST deadline: when set, the next sleep is capped so the check-in fires
+        # exactly at this time rather than overshooting the end of the rest period.
+        self._rest_ends_at: Optional[datetime] = None
         # Track previous mode for mode-change notifications
         self._prev_mode: Optional[UserMode] = None
         # Track when a persistent issue was first seen (for 3-minute speak gate)
@@ -212,6 +215,15 @@ class MonitoringScheduler:
     def update_goal(self, goal: str) -> None:
         """Update the session goal used by future cycles."""
         self.session_goal = goal or None
+
+    def set_rest_ends_at(self, dt: Optional[datetime]) -> None:
+        """Pin the REST deadline so the final REST sleep ends exactly on time.
+
+        When set, the scheduler caps the next inter-cycle sleep so the check-in
+        fires at *dt* rather than overshooting the end of the rest period.
+        Pass None to clear the deadline (e.g. when switching back to FOCUS).
+        """
+        self._rest_ends_at = dt
 
     def update_tasks(self, tasks: list) -> None:
         """Update the task-list emptiness flag used by future cycles.
@@ -361,6 +373,25 @@ class MonitoringScheduler:
                 else:
                     wait_secs = self._random_interval()
                     logger.info("Next cycle in %d seconds.", wait_secs)
+
+                # If a REST deadline is set, cap the sleep so the check-in fires
+                # exactly when the rest period ends rather than overshooting it.
+                # This keeps intermediate REST check-ins (fake-rest / posture) while
+                # guaranteeing the final one lands on the FOCUS transition boundary.
+                if self._rest_ends_at is not None:
+                    secs_until_end = max(
+                        1,
+                        (
+                            self._rest_ends_at - datetime.now(timezone.utc)
+                        ).total_seconds(),
+                    )
+                    if secs_until_end <= wait_secs:
+                        wait_secs = int(secs_until_end)
+                        self._rest_ends_at = None  # consumed — deadline reached
+                        logger.info(
+                            "REST deadline: capping sleep to %d seconds.", wait_secs
+                        )
+
                 self._next_capture_at = datetime.now(timezone.utc) + timedelta(
                     seconds=wait_secs
                 )

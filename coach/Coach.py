@@ -248,7 +248,7 @@ def _render_controls(open_session=None) -> None:
             # Offer Resume (primary) and New Session (secondary)
             if st.button(
                 "Resume",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
                 key="ctrl_resume_session",
                 disabled=bool(errors),
@@ -258,7 +258,7 @@ def _render_controls(open_session=None) -> None:
 
             if st.button(
                 "New Session",
-                use_container_width=True,
+                width="stretch",
                 key="ctrl_new_session",
                 disabled=bool(errors),
             ):
@@ -272,7 +272,7 @@ def _render_controls(open_session=None) -> None:
             if st.button(
                 "Start",
                 disabled=bool(errors),
-                use_container_width=True,
+                width="stretch",
                 type="primary",
                 key="ctrl_start",
             ):
@@ -286,7 +286,7 @@ def _render_controls(open_session=None) -> None:
             if st.button(
                 "Resume",
                 disabled=pause_disabled,
-                use_container_width=True,
+                width="stretch",
                 key="ctrl_resume",
             ):
                 if scheduler:
@@ -297,7 +297,7 @@ def _render_controls(open_session=None) -> None:
             if st.button(
                 "Pause",
                 disabled=pause_disabled,
-                use_container_width=True,
+                width="stretch",
                 key="ctrl_pause",
             ):
                 if scheduler:
@@ -309,7 +309,7 @@ def _render_controls(open_session=None) -> None:
         if st.button(
             stop_label,
             disabled=is_stopping,
-            use_container_width=True,
+            width="stretch",
             key="ctrl_stop",
         ):
             stop_monitoring()

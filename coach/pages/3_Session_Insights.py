@@ -258,7 +258,7 @@ if not spans_df.empty:
         )
         .properties(height=80)
     )
-    st.altair_chart(band_chart, use_container_width=True)
+    st.altair_chart(band_chart, width="stretch")
 else:
     st.caption("Not enough data for timeline.")
 
@@ -389,7 +389,7 @@ rule = (
 )
 
 st.altair_chart(
-    (focus_line + focus_points + rule).properties(height=260), use_container_width=True
+    (focus_line + focus_points + rule).properties(height=260), width="stretch"
 )
 
 # HR overlay — shown beneath the focus timeline when Fitbit data is available
@@ -464,7 +464,7 @@ if hr_captures:
     else:
         hr_chart = (hr_line + hr_points).properties(height=180)
 
-    st.altair_chart(hr_chart, use_container_width=True)
+    st.altair_chart(hr_chart, width="stretch")
 
 st.divider()
 
@@ -516,7 +516,7 @@ if total_s > 0:
         )
         .properties(height=100)
     )
-    st.altair_chart(breakdown_bar, use_container_width=True)
+    st.altair_chart(breakdown_bar, width="stretch")
 
     col_f, col_r = st.columns(2)
     col_f.metric(
@@ -579,7 +579,7 @@ if bq_captures:
         )
         .properties(height=160)
     )
-    st.altair_chart(bq_bars, use_container_width=True)
+    st.altair_chart(bq_bars, width="stretch")
     st.divider()
 
 # ---------------------------------------------------------------------------
@@ -617,7 +617,7 @@ if distraction_cats:
         )
         .properties(height=180)
     )
-    st.altair_chart(dist_bar, use_container_width=True)
+    st.altair_chart(dist_bar, width="stretch")
     st.divider()
 
 # ---------------------------------------------------------------------------
@@ -664,7 +664,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            use_container_width=True,
+            width="stretch",
         )
 
     with ia2:
@@ -682,7 +682,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            use_container_width=True,
+            width="stretch",
         )
 
     with ia3:
@@ -702,7 +702,7 @@ if input_captures:
                 ],
             )
             .properties(height=120),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
@@ -751,7 +751,7 @@ log_df = pd.DataFrame(log_rows)
 
 st.dataframe(
     log_df,
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     column_config={
         "Score": st.column_config.NumberColumn(min_value=1, max_value=10),
@@ -849,7 +849,7 @@ else:
     )
     st.altair_chart(
         (focus_trend_line + focus_dots + avg_rule).properties(height=200),
-        use_container_width=True,
+        width="stretch",
     )
 
     # Focused % trend
@@ -890,5 +890,5 @@ else:
     )
     st.altair_chart(
         (pct_line + pct_dots + pct_rule).properties(height=200),
-        use_container_width=True,
+        width="stretch",
     )
