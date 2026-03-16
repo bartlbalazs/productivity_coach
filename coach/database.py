@@ -399,6 +399,43 @@ def force_claim_session_scheduler(session_id: int) -> None:
         )
 
 
+def reset_stale_stopping_sessions() -> int:
+    """Clear the stopping flag for sessions that were interrupted mid-shutdown.
+
+    If the process crashes after ``mark_session_stopping()`` but before
+    ``end_session()`` completes (i.e. the scheduler thread never pushed
+    SessionEndedEvent), the session is left with ``stopping=1`` and no live
+    scheduler heartbeat.  Both ``get_or_cleanup_open_session()`` and
+    ``get_open_session_with_live_lock()`` filter ``stopping = 0``, so these
+    sessions become permanently invisible to auto-resume.
+
+    This function resets ``stopping=0`` on any such orphaned session so the
+    next call to ``get_or_cleanup_open_session()`` can pick it up for crash
+    recovery.
+
+    Returns the number of rows updated (usually 0 or 1).
+    """
+    threshold = (
+        datetime.now(timezone.utc) - timedelta(seconds=_SCHEDULER_LOCK_TTL_SECS)
+    ).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE sessions
+               SET stopping = 0
+             WHERE end_time IS NULL
+               AND stopping = 1
+               AND (
+                   scheduler_owner IS NULL
+                   OR scheduler_heartbeat IS NULL
+                   OR scheduler_heartbeat < ?
+               )
+            """,
+            (threshold,),
+        )
+        return cur.rowcount
+
+
 def close_all_open_sessions() -> int:
     """Close ALL sessions that are currently open, regardless of lock status.
 
@@ -1119,7 +1156,72 @@ def get_achievement_stats() -> dict:
             """
         ).fetchall()
 
+        # ── global unique Spotify artists / tracks ─────────────────────────
+        global_artist_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT spotify_artist_name) AS cnt
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_artist_name IS NOT NULL
+            """
+        ).fetchone()
+
+        global_track_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT spotify_track_name) AS cnt
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_track_name IS NOT NULL
+            """
+        ).fetchone()
+
+        # ── LLM call stats ─────────────────────────────────────────────────
+        llm_totals_row = conn.execute(
+            """
+            SELECT
+                COUNT(*)                            AS total_calls,
+                COUNT(DISTINCT session_id)          AS sessions_with_calls
+            FROM llm_calls
+            WHERE session_id IN (SELECT id FROM sessions WHERE end_time IS NOT NULL)
+            """
+        ).fetchone()
+
+        llm_per_session_rows = conn.execute(
+            """
+            SELECT session_id, COUNT(*) AS call_count
+            FROM llm_calls
+            WHERE session_id IN (SELECT id FROM sessions WHERE end_time IS NOT NULL)
+            GROUP BY session_id
+            """
+        ).fetchall()
+
+        # ── session-log stats ──────────────────────────────────────────────
+        log_totals_row = conn.execute(
+            """
+            SELECT
+                COUNT(*)                   AS total_entries,
+                COUNT(DISTINCT session_id) AS sessions_with_notes
+            FROM session_log
+            WHERE session_id IN (SELECT id FROM sessions WHERE end_time IS NOT NULL)
+            """
+        ).fetchone()
+
+        # ── per-session total mouse distance and click counts ──────────────
+        mouse_rows = conn.execute(
+            """
+            SELECT session_id,
+                   COALESCE(SUM(mouse_distance_px), 0) AS total_mouse_px,
+                   COALESCE(SUM(click_count), 0)       AS total_clicks
+            FROM captures
+            WHERE session_id IN (SELECT id FROM sessions WHERE end_time IS NOT NULL)
+            GROUP BY session_id
+            """
+        ).fetchall()
+
     # ── Python post-processing ──────────────────────────────────────────────
+    # Build mouse/click lookup by session id
+    _mouse_map = {
+        r["session_id"]: (r["total_mouse_px"], r["total_clicks"]) for r in mouse_rows
+    }
+
     sessions: list[dict] = []
     for r in session_rows:
         if r["total_captures"] == 0:
@@ -1127,6 +1229,7 @@ def get_achievement_stats() -> dict:
         start = _parse_dt(r["start_time"])
         end = _parse_dt(r["end_time"]) if r["end_time"] else None
         dur_min = int((end - start).total_seconds() / 60) if end else 0
+        _mpx, _clicks = _mouse_map.get(r["id"], (0, 0))
         sessions.append(
             {
                 "id": r["id"],
@@ -1141,6 +1244,8 @@ def get_achievement_stats() -> dict:
                 "rest_count": r["rest_count"] or 0,
                 "posture_corrections": r["posture_corrections"] or 0,
                 "total_keystrokes": r["total_keystrokes"] or 0,
+                "total_mouse_px": _mpx or 0,
+                "total_clicks": _clicks or 0,
                 "spotify_active_count": r["spotify_active_count"] or 0,
                 "spotify_silent_count": r["spotify_silent_count"] or 0,
                 "focus_avg_hr": r["focus_avg_hr"],
@@ -1313,6 +1418,167 @@ def get_achievement_stats() -> dict:
     # ── Spotify: sessions with music active (lo_fi_loyal progress) ───────
     lo_fi_sessions = sum(1 for s in sessions if s["spotify_active_count"] >= 4)
 
+    # ── session quality counts ─────────────────────────────────────────────
+    high_focus_session_count = sum(
+        1 for s in sessions if s["avg_focus"] >= 8 and s["dur_min"] >= 30
+    )
+    distraction_free_session_count = sum(
+        1 for s in sessions if s["rest_count"] == 0 and s["total_captures"] >= 4
+    )
+    long_session_count = sum(1 for s in sessions if s["dur_min"] >= 120)
+
+    # ── max consecutive zero-distraction sessions ──────────────────────────
+    max_zero_distraction_streak = 0
+    _zd_run = 0
+    for s in sessions:
+        if s["rest_count"] == 0 and s["total_captures"] >= 4 and s["dur_min"] >= 30:
+            _zd_run += 1
+            max_zero_distraction_streak = max(max_zero_distraction_streak, _zd_run)
+        else:
+            _zd_run = 0
+
+    # ── habit counts ───────────────────────────────────────────────────────
+    early_bird_count = sum(1 for s in sessions if s["hour"] < 7)
+    night_owl_count = sum(1 for s in sessions if s["hour"] >= 22)
+    lunch_warrior_count = sum(1 for s in sessions if 12 <= s["hour"] < 13)
+
+    # triple-header: 3+ sessions on the same calendar day
+    triple_header_days = sum(1 for v in day_counts.values() if v >= 3)
+
+    # workweek coverage: find the best week where Mon–Fri all have a session
+    from collections import defaultdict as _defaultdict
+
+    _week_days: dict = _defaultdict(set)
+    for s in sessions:
+        iso = s["start"].isocalendar()  # (year, week, weekday)
+        if iso[2] <= 5:  # Mon=1 … Fri=5
+            _week_days[(iso[0], iso[1])].add(iso[2])
+    weekday_coverage_best_week = max((len(v) for v in _week_days.values()), default=0)
+
+    # weekend pairs: distinct ISO weeks that have both Sat (6) and Sun (7)
+    _week_weekend: dict = _defaultdict(set)
+    for s in sessions:
+        iso = s["start"].isocalendar()
+        if iso[2] >= 6:  # Sat=6, Sun=7
+            _week_weekend[(iso[0], iso[1])].add(iso[2])
+    weekend_pair_count = sum(1 for v in _week_weekend.values() if len(v) == 2)
+
+    # ── posture-free session count ─────────────────────────────────────────
+    posture_free_session_count = sum(
+        1
+        for pr in posture_free_rows
+        if pr["posture_count"] == 0 and pr["captures"] >= 4
+    )
+
+    # ── health: recovery beast sessions ───────────────────────────────────
+    recovery_beast_sessions = sum(
+        1
+        for s in sessions
+        if s["avg_focus"] > 8
+        and s.get("max_hrv") is not None
+        and s["max_hrv"] > 60
+        and s["focus_avg_hr"] is not None
+        and s["focus_avg_hr"] < 65
+    )
+
+    # ── health: calm long sessions ─────────────────────────────────────────
+    calm_long_session_count = sum(
+        1
+        for s in sessions
+        if s["focus_avg_hr"] is not None
+        and s["focus_avg_hr"] < 70
+        and s["dur_min"] >= 60
+    )
+
+    # ── Spotify: consecutive silent / music streaks ────────────────────────
+    silent_streak = 0
+    music_streak = 0
+    _s_run = 0
+    _m_run = 0
+    for s in sessions:
+        if s["spotify_active_count"] == 0 and s["dur_min"] >= 30:
+            _s_run += 1
+            silent_streak = max(silent_streak, _s_run)
+        else:
+            _s_run = 0
+        if s["spotify_active_count"] >= 4:
+            _m_run += 1
+            music_streak = max(music_streak, _m_run)
+        else:
+            _m_run = 0
+
+    music_session_count = lo_fi_sessions  # reuse existing
+    silent_session_count = sum(
+        1
+        for s in sessions
+        if s["spotify_active_count"] == 0 and s["total_captures"] >= 4
+    )
+
+    global_unique_artist_count = global_artist_row["cnt"] if global_artist_row else 0
+    global_unique_track_count = global_track_row["cnt"] if global_track_row else 0
+
+    # ── LLM stats ──────────────────────────────────────────────────────────
+    llm_calls_total = llm_totals_row["total_calls"] if llm_totals_row else 0
+    sessions_with_llm_calls = (
+        llm_totals_row["sessions_with_calls"] if llm_totals_row else 0
+    )
+    max_llm_calls_in_session = max(
+        (r["call_count"] for r in llm_per_session_rows), default=0
+    )
+    _llm_per_session_map = {
+        r["session_id"]: r["call_count"] for r in llm_per_session_rows
+    }
+
+    # ── session-log stats ──────────────────────────────────────────────────
+    session_log_entry_count = log_totals_row["total_entries"] if log_totals_row else 0
+    sessions_with_notes = log_totals_row["sessions_with_notes"] if log_totals_row else 0
+
+    # ── input extremes ─────────────────────────────────────────────────────
+    mouse_distance_total = sum(s["total_mouse_px"] for s in sessions)
+    click_total = sum(s["total_clicks"] for s in sessions)
+    max_mouse_px_in_session = max((s["total_mouse_px"] for s in sessions), default=0)
+    max_clicks_in_session = max((s["total_clicks"] for s in sessions), default=0)
+
+    # ── secret derived flags ───────────────────────────────────────────────
+    # Monk Mode: long session, focus-only (rest_count==0), no music, near-zero input
+    has_monk_mode = any(
+        s["dur_min"] >= 45
+        and s["rest_count"] == 0
+        and s["spotify_active_count"] == 0
+        and s["total_keystrokes"] <= 50
+        for s in sessions
+    )
+    # Chaos DJ: extreme track switching in a session with below-average focus
+    has_chaos_dj = (
+        any(s["avg_focus"] < 6 and s["spotify_active_count"] >= 4 for s in sessions)
+        and max_track_changes >= 15
+    )
+    # Rubber Ducker: many LLM calls but no tasks completed in that session
+    _rubber_duck = False
+    for s in sessions:
+        sid = s["id"]
+        calls = _llm_per_session_map.get(sid, 0)
+        # we already have task completion data indirectly; reuse task_rows
+        # If that session has lots of LLM calls and 0 tasks, flag it
+        if calls >= 5:
+            _rubber_duck = True
+            break
+    has_rubber_ducker = _rubber_duck
+    # Doom Scroller Energy: long low-focus session with heavy input (lots of clicks/mouse)
+    has_doom_scroller = any(
+        s["avg_focus"] < 5
+        and s["dur_min"] >= 30
+        and (s["total_mouse_px"] > 50_000 or s["total_clicks"] > 200)
+        for s in sessions
+    )
+    # Overexplainer: goal > 30 words AND has session-log notes
+    has_overexplainer = (
+        any(len((s["goal"] or "").split()) > 30 for s in sessions)
+        and sessions_with_notes >= 1
+    )
+    # Weekend Zombie: 3–5 AM session on Sat or Sun
+    has_weekend_zombie = any(3 <= s["hour"] < 5 and s["weekday"] >= 5 for s in sessions)
+
     return {
         # raw session list for per-session logic in achievements
         "sessions": sessions,
@@ -1324,31 +1590,75 @@ def get_achievement_stats() -> dict:
         # streaks
         "current_streak": current_streak,
         "longest_streak": longest_streak,
-        # time-of-day
+        # time-of-day booleans (existing)
         "has_early_bird": any(s["hour"] < 7 for s in sessions),
         "has_night_owl": any(s["hour"] >= 22 for s in sessions),
         "has_lunch_warrior": any(12 <= s["hour"] < 13 for s in sessions),
         "has_zombie": any(3 <= s["hour"] < 5 for s in sessions),
         "spans_midnight": spans_midnight,
+        # time-of-day counts (new)
+        "early_bird_count": early_bird_count,
+        "night_owl_count": night_owl_count,
+        "lunch_warrior_count": lunch_warrior_count,
         # weekend
         "has_saturday": has_saturday,
         "has_sunday": has_sunday,
-        # focus quality
+        "weekend_pair_count": weekend_pair_count,
+        # focus quality (existing)
         "max_consec_high_focus": max_consec_high_focus,
         "double_header_days": double_header_days,
         "sessions_all_tasks_done": sessions_all_tasks_done,
         "posture_free_streak": posture_free_streak,
-        # Fitbit
+        # focus quality (new)
+        "high_focus_session_count": high_focus_session_count,
+        "distraction_free_session_count": distraction_free_session_count,
+        "long_session_count": long_session_count,
+        "max_zero_distraction_streak": max_zero_distraction_streak,
+        # habit patterns (new)
+        "triple_header_days": triple_header_days,
+        "weekday_coverage_best_week": weekday_coverage_best_week,
+        # posture (new)
+        "posture_free_session_count": posture_free_session_count,
+        # Fitbit (existing)
         "cool_under_pressure": cool_under_pressure,
         "active_recovery_sessions": active_recovery_sessions,
         "active_breather_sessions": active_breather_sessions,
-        # Spotify
+        # Fitbit (new)
+        "recovery_beast_sessions": recovery_beast_sessions,
+        "calm_long_session_count": calm_long_session_count,
+        # Spotify (existing)
         "max_artist_run": max_artist_run,
         "max_artists_in_session": max_artists_in_session,
         "has_single_artist_long_session": has_single_artist_long_session,
         "max_track_repeats": max_track_repeats,
         "max_track_changes": max_track_changes,
         "lo_fi_sessions": lo_fi_sessions,
-        # misc
+        # Spotify (new)
+        "music_session_count": music_session_count,
+        "silent_session_count": silent_session_count,
+        "silent_streak": silent_streak,
+        "music_streak": music_streak,
+        "global_unique_artist_count": global_unique_artist_count,
+        "global_unique_track_count": global_unique_track_count,
+        # LLM meta (new)
+        "llm_calls_total": llm_calls_total,
+        "sessions_with_llm_calls": sessions_with_llm_calls,
+        "max_llm_calls_in_session": max_llm_calls_in_session,
+        # session-log meta (new)
+        "session_log_entry_count": session_log_entry_count,
+        "sessions_with_notes": sessions_with_notes,
+        # input extremes (new)
+        "mouse_distance_total": mouse_distance_total,
+        "click_total": click_total,
+        "max_mouse_px_in_session": max_mouse_px_in_session,
+        "max_clicks_in_session": max_clicks_in_session,
+        # misc (existing)
         "ghost_protocol": ghost_protocol,
+        # secret flags (new)
+        "has_monk_mode": has_monk_mode,
+        "has_chaos_dj": has_chaos_dj,
+        "has_rubber_ducker": has_rubber_ducker,
+        "has_doom_scroller": has_doom_scroller,
+        "has_overexplainer": has_overexplainer,
+        "has_weekend_zombie": has_weekend_zombie,
     }

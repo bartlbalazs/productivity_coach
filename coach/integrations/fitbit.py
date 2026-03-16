@@ -236,10 +236,13 @@ def disconnect() -> None:
     except FileNotFoundError:
         pass
 
-    # Clear module-level caches so stale data isn't served after reconnect
+    # Clear module-level caches so stale data isn't served after reconnect.
+    # Hold _slow_data_lock because get_current_health() reads/writes these
+    # globals under the same lock from the scheduler thread.
     global _cycle_count, _slow_data_cache
-    _cycle_count = 0
-    _slow_data_cache = None
+    with _slow_data_lock:
+        _cycle_count = 0
+        _slow_data_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -302,16 +305,20 @@ class AuthServer:
                     auth_server_ref.error = (
                         "OAuth state mismatch — possible CSRF attempt."
                     )
-                    self._respond("Authorization failed: state mismatch.")
-                    threading.Thread(target=_shutdown_server, daemon=True).start()
+                    try:
+                        self._respond("Authorization failed: state mismatch.")
+                    finally:
+                        threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code_list = qs.get("code")
                 if not code_list:
                     error = qs.get("error", ["unknown"])[0]
                     auth_server_ref.error = f"Fitbit denied access: {error}"
-                    self._respond("Authorization failed.")
-                    threading.Thread(target=_shutdown_server, daemon=True).start()
+                    try:
+                        self._respond("Authorization failed.")
+                    finally:
+                        threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code = code_list[0]
@@ -460,7 +467,11 @@ def _api_get(token: dict, path: str) -> Optional[dict]:
                 )
                 return None
             if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", "60"))
+                try:
+                    retry_after = int(resp.headers.get("Retry-After", "60"))
+                except ValueError:
+                    # Retry-After may be an HTTP-date string rather than seconds
+                    retry_after = 60
                 wait = min(retry_after, 60)
                 logger.warning(
                     "Fitbit API rate-limited (429) for %s — backing off %ds.",

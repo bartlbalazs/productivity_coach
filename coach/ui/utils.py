@@ -18,6 +18,7 @@ _HIDE_CHROME_CSS = """
 <style>
 #MainMenu {visibility: hidden;}
 .stDeployButton {display: none;}
+[data-testid="stAppDeployButton"] {display: none;}
 [data-testid="stStatusWidget"] {display: none;}
 header[data-testid="stHeader"] {background: transparent;}
 </style>

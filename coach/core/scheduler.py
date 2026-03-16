@@ -202,6 +202,11 @@ class MonitoringScheduler:
             release_session_scheduler(self.session_id, self.owner_token)
         except Exception:
             logger.exception("Failed to release scheduler lock on stop.")
+        # Join the heartbeat thread so it cannot refresh a lock we just released.
+        # Use a short timeout — the heartbeat wakes on _stop_event so this should
+        # return almost immediately.
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=2)
         logger.info("Stop signal sent to scheduler.")
 
     def update_goal(self, goal: str) -> None:
@@ -274,6 +279,12 @@ class MonitoringScheduler:
         this thread signals the scheduler to stop.
         """
         while not self._stop_event.is_set():
+            # Wait first — this also serves as the sleep between refreshes.
+            # If _stop_event is set during the wait, the loop exits immediately
+            # without calling refresh_scheduler_heartbeat on an already-released lock.
+            self._stop_event.wait(timeout=self._HEARTBEAT_INTERVAL_SECS)
+            if self._stop_event.is_set():
+                return
             try:
                 # If refresh returns False, our lock is gone or the session ended.
                 if not refresh_scheduler_heartbeat(self.session_id, self.owner_token):
@@ -285,7 +296,6 @@ class MonitoringScheduler:
                     return
             except Exception:
                 logger.exception("Failed to refresh scheduler heartbeat.")
-            self._stop_event.wait(timeout=self._HEARTBEAT_INTERVAL_SECS)
 
     def _random_interval(self) -> int:
         return random.randint(self.interval_min, self.interval_max)

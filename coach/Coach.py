@@ -329,7 +329,7 @@ def _sidebar_fragment() -> None:
     st.caption("AI focus monitoring")
     st.divider()
 
-    st.page_link("pages/4_Settings.py", label="Settings", icon="⚙️")
+    st.page_link("pages/5_Settings.py", label="Settings", icon="⚙️")
     st.divider()
 
     is_monitoring = st.session_state["monitoring"]

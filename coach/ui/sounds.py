@@ -146,8 +146,14 @@ def _play(wave: np.ndarray) -> None:
         channel = sound.play()
         # Block until this specific channel finishes — avoids waiting on
         # unrelated sounds playing concurrently (e.g. TTS audio).
+        # A 30-second hard timeout guards against a hung pygame channel.
         if channel is not None:
+            deadline = pygame.time.get_ticks() + 30_000  # 30 s in ms
             while channel.get_busy():
+                if pygame.time.get_ticks() >= deadline:
+                    logger.warning("Sound playback timed out; stopping channel.")
+                    channel.stop()
+                    break
                 pygame.time.wait(10)
     except Exception as exc:
         logger.warning("Failed to play sound: %s", exc)

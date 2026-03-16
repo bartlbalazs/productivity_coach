@@ -34,6 +34,7 @@ from coach.database import (
     mark_session_stopping,
     mark_task_done,
     replace_session_tasks,
+    reset_stale_stopping_sessions,
     save_session_summary,
     update_session_goal,
 )
@@ -286,7 +287,12 @@ def stop_monitoring() -> None:
         mark_session_stopping(sid)
     if scheduler:
         scheduler.stop()
-    _unregister_scheduler()
+    # Do NOT call _unregister_scheduler() here — the SessionEndedEvent handler
+    # (line 194) is the single correct place to clear _active_scheduler.
+    # Clearing it here races with the still-running background thread: if a
+    # Streamlit rerun fires before SessionEndedEvent is processed,
+    # auto_resume_if_needed() sees _active_scheduler=None, finds a live DB
+    # lock, force-breaks it, and starts a second concurrent scheduler thread.
     # Give immediate UI feedback — SessionEndedEvent handler clears both flags.
     st.session_state["stopping"] = True
 
@@ -489,6 +495,16 @@ def auto_resume_if_needed() -> None:
     """
     if st.session_state.get("monitoring"):
         return  # already running — normal rerun within the same tab
+
+    # Recover sessions that were left with stopping=1 after a crash (i.e. the
+    # process died after mark_session_stopping() but before end_session()).
+    # Their scheduler heartbeat will have expired, so we clear the flag to make
+    # them visible to get_or_cleanup_open_session() below.
+    recovered = reset_stale_stopping_sessions()
+    if recovered:
+        logger.info(
+            "Reset stopping=0 for %d session(s) orphaned mid-shutdown.", recovered
+        )
 
     # --- Path 1: page refresh — scheduler still running in this process ---
     live_session = get_open_session_with_live_lock()

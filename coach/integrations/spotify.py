@@ -192,8 +192,10 @@ class AuthServer:
                     auth_server_ref.error = (
                         "OAuth state mismatch — possible CSRF attempt."
                     )
-                    self._respond("Authorization failed: state mismatch.")
-                    threading.Thread(target=_shutdown_server, daemon=True).start()
+                    try:
+                        self._respond("Authorization failed: state mismatch.")
+                    finally:
+                        threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code_list = qs.get("code")
@@ -201,8 +203,10 @@ class AuthServer:
                     # Redirect without code (e.g. error=access_denied)
                     error = qs.get("error", ["unknown"])[0]
                     auth_server_ref.error = f"Spotify denied access: {error}"
-                    self._respond("Authorization failed.")
-                    threading.Thread(target=_shutdown_server, daemon=True).start()
+                    try:
+                        self._respond("Authorization failed.")
+                    finally:
+                        threading.Thread(target=_shutdown_server, daemon=True).start()
                     return
 
                 code = code_list[0]
