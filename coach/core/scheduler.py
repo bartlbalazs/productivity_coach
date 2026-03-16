@@ -528,8 +528,10 @@ class MonitoringScheduler:
         else:
             self._posture_issue_since = None
 
-        # Poor break quality (REST mode only) — computed from input metrics
-        if current_mode == UserMode.REST and capture is not None:
+        # Poor break quality — computed from input metrics.
+        # The snapshot covers the interval since the *previous* check-in, so
+        # it reflects self._prev_mode, not the mode the LLM just decided.
+        if self._prev_mode == UserMode.REST and capture is not None:
             snapshot = capture.input_snapshot
             if snapshot is not None:
                 bq = snapshot.compute_break_quality()

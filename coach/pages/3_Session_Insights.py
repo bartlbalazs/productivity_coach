@@ -177,9 +177,7 @@ end_dt = (
 session_duration_s = (end_dt - start_dt).total_seconds()
 
 break_quality_scores = [
-    c.break_quality_score
-    for c in captures
-    if c.is_distracted and c.break_quality_score is not None
+    c.break_quality_score for c in captures if c.break_quality_score is not None
 ]
 avg_break_quality = (
     round(sum(break_quality_scores) / len(break_quality_scores), 1)
@@ -541,9 +539,7 @@ st.divider()
 # Section 4 — Break Quality
 # ---------------------------------------------------------------------------
 
-bq_captures = [
-    c for c in captures if c.is_distracted and c.break_quality_score is not None
-]
+bq_captures = [c for c in captures if c.break_quality_score is not None]
 if bq_captures:
     st.subheader("Break Quality")
     st.caption("1 = poor rest · 10 = great rest · green ≥ 7")
@@ -744,9 +740,7 @@ for c in captures:
             "Activity": c.activity_label or "—",
             "Instruction": c.feedback_message,
             "Break Quality": (
-                c.break_quality_score
-                if c.is_distracted and c.break_quality_score is not None
-                else None
+                c.break_quality_score if c.break_quality_score is not None else None
             ),
             "Posture": "⚠" if c.posture_correction else "✓",
         }

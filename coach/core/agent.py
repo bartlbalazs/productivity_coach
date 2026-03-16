@@ -753,11 +753,17 @@ def persist_node(state: CycleState) -> dict:
         "persist_node called before analyse_node produced a result"
     )
 
-    # Compute break quality algorithmically from input metrics (REST mode only).
+    # Compute break quality algorithmically from input metrics.
     # The LLM no longer produces this field — it is derived from keyboard/mouse data.
+    # The snapshot covers the interval *since the last check-in*, so the score
+    # reflects the *previous* mode, not the mode the LLM just decided.  We only
+    # record a break quality score when the previous check-in was REST (i.e. the
+    # user was supposed to be resting during the interval that just ended).
     snapshot = capture.input_snapshot if capture else None
     break_quality_score: Optional[int] = None
-    if result.mode.value == "rest" and snapshot is not None:
+    history: list = state.get("history") or []  # newest-first
+    prev_was_rest = len(history) > 0 and history[0].is_distracted
+    if prev_was_rest and snapshot is not None:
         break_quality_score = snapshot.compute_break_quality()
 
     record_id = save_capture(

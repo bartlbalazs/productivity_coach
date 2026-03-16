@@ -89,8 +89,11 @@ def _handle_cycle_complete_event(event: CycleCompleteEvent) -> None:
     st.session_state["latest_capture"] = event.capture
     st.session_state["latest_result"] = event.result
 
-    # Compute break quality from input snapshot (mirrors persist_node logic)
-    if event.result.mode.value == "rest" and event.capture.input_snapshot is not None:
+    # Compute break quality from input snapshot.
+    # The snapshot covers the interval since the *previous* check-in, so the
+    # score reflects the previous mode, not the mode the LLM just decided.
+    prev_mode = prev_result.mode if prev_result is not None else None
+    if prev_mode == UserMode.REST and event.capture.input_snapshot is not None:
         st.session_state["latest_break_quality"] = (
             event.capture.input_snapshot.compute_break_quality()
         )
