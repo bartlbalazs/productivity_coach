@@ -435,8 +435,7 @@ def _build_history_summary(
     # Sprint summary: derived from the full session history (not windowed) so the
     # LLM always has the accurate total sprint count across the entire session.
     completed_count = len(sprint_summary) if sprint_summary else 0
-    if completed_count > 0:
-        assert sprint_summary is not None
+    if completed_count > 0 and sprint_summary:
         sprint_lines = ", ".join(sprint_summary)
         long_break_due = completed_count > 0 and completed_count % 4 == 0
         long_break_note = (
@@ -746,12 +745,28 @@ def persist_node(state: CycleState) -> dict:
         hrv=capture.fitbit_data.hrv if capture.fitbit_data else None,
         steps=capture.fitbit_data.steps if capture.fitbit_data else None,
         webcam_image=capture.webcam_bytes,
+        spotify_active=bool(
+            capture.spotify_track is not None and capture.spotify_track.is_playing
+        ),
+        spotify_track_name=(
+            capture.spotify_track.track_name
+            if capture.spotify_track is not None and capture.spotify_track.is_playing
+            else None
+        ),
+        spotify_artist_name=(
+            capture.spotify_track.artist_name
+            if capture.spotify_track is not None and capture.spotify_track.is_playing
+            else None
+        ),
     )
 
     logger.info(
         "Persisted capture record id=%d for session %d.", record_id, state["session_id"]
     )
-    sprints = count_completed_sprints(state.get("history", []))
+    # Use the full-session sprint_summary (already computed from complete history
+    # in capture_node) rather than re-counting from the windowed history slice,
+    # which would undercount sprints in long sessions.
+    sprints = len(state.get("sprint_summary") or [])
     return {
         "record_id": record_id,
         "timestamp": datetime.now(timezone.utc),

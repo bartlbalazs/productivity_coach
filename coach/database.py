@@ -84,6 +84,9 @@ class CaptureRecord:
     resting_hr: Optional[int] = None
     hrv: Optional[float] = None
     steps: Optional[int] = None
+    spotify_active: Optional[bool] = None
+    spotify_track_name: Optional[str] = None
+    spotify_artist_name: Optional[str] = None
     # Raw image is stored but not always loaded — use load_images=True
     webcam_image: Optional[bytes] = None
 
@@ -228,6 +231,9 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN scheduler_owner TEXT DEFAULT NULL",
     "ALTER TABLE sessions ADD COLUMN scheduler_heartbeat TEXT DEFAULT NULL",
     "ALTER TABLE session_log ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE captures ADD COLUMN spotify_active INTEGER DEFAULT 0",
+    "ALTER TABLE captures ADD COLUMN spotify_track_name TEXT DEFAULT NULL",
+    "ALTER TABLE captures ADD COLUMN spotify_artist_name TEXT DEFAULT NULL",
 ]
 
 # Seconds after which a scheduler heartbeat is considered stale
@@ -647,6 +653,9 @@ def save_capture(
     hrv: Optional[float] = None,
     steps: Optional[int] = None,
     webcam_image: Optional[bytes] = None,
+    spotify_active: bool = False,
+    spotify_track_name: Optional[str] = None,
+    spotify_artist_name: Optional[str] = None,
 ) -> int:
     """Persist a capture + analysis result and return the record ID."""
     now = datetime.now(timezone.utc).isoformat()
@@ -660,8 +669,9 @@ def save_capture(
                 activity_label, distraction_category,
                 suggested_next_interval, break_quality_score, posture_correction,
                 keystroke_count, mouse_distance_px, click_count,
-                heart_rate, resting_hr, hrv, steps
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                heart_rate, resting_hr, hrv, steps,
+                spotify_active, spotify_track_name, spotify_artist_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -684,6 +694,9 @@ def save_capture(
                 resting_hr,
                 hrv,
                 steps,
+                int(spotify_active),
+                spotify_track_name,
+                spotify_artist_name,
             ),
         )
         return cur.lastrowid or 0  # type: ignore[return-value]
@@ -711,6 +724,11 @@ def _row_to_capture_record(r: sqlite3.Row, load_images: bool = False) -> Capture
         resting_hr=r["resting_hr"],
         hrv=r["hrv"],
         steps=r["steps"],
+        spotify_active=bool(r["spotify_active"])
+        if r["spotify_active"] is not None
+        else None,
+        spotify_track_name=r["spotify_track_name"],
+        spotify_artist_name=r["spotify_artist_name"],
         webcam_image=r["webcam_image"] if load_images else None,
     )
 
@@ -727,7 +745,8 @@ def get_recent_captures(
         "activity_label, distraction_category, suggested_next_interval, "
         "break_quality_score, posture_correction, "
         "keystroke_count, mouse_distance_px, click_count, "
-        "heart_rate, resting_hr, hrv, steps"
+        "heart_rate, resting_hr, hrv, steps, "
+        "spotify_active, spotify_track_name, spotify_artist_name"
     )
     if load_images:
         cols += ", webcam_image"
@@ -751,7 +770,8 @@ def get_all_captures_for_session(session_id: int) -> list[CaptureRecord]:
             "activity_label, distraction_category, suggested_next_interval, "
             "break_quality_score, posture_correction, "
             "keystroke_count, mouse_distance_px, click_count, "
-            "heart_rate, resting_hr, hrv, steps "
+            "heart_rate, resting_hr, hrv, steps, "
+            "spotify_active, spotify_track_name, spotify_artist_name "
             "FROM captures WHERE session_id = ? ORDER BY timestamp ASC",
             (session_id,),
         ).fetchall()
@@ -960,4 +980,375 @@ def get_llm_calls_stats(session_id: Optional[int] = None) -> dict:
         "total_output": row["total_output"] or 0,
         "avg_latency_ms": round(row["avg_latency_ms"] or 0, 0),
         "error_count": row["error_count"] or 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Achievement stats
+# ---------------------------------------------------------------------------
+
+
+def get_achievement_stats() -> dict:
+    """Return a comprehensive stats dict used to evaluate all achievements.
+
+    Designed as a single-pass aggregation to avoid loading raw image blobs or
+    iterating full capture history in Python.  All heavy lifting is done in SQL.
+    """
+    with _get_conn() as conn:
+        # ── per-session aggregate ──────────────────────────────────────────
+        session_rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.start_time,
+                s.end_time,
+                s.goal,
+                COUNT(c.id)                        AS total_captures,
+                AVG(c.focus_score)                 AS avg_focus,
+                MIN(c.focus_score)                 AS min_focus,
+                MAX(c.focus_score)                 AS max_focus,
+                SUM(c.is_distracted)               AS rest_count,
+                SUM(CASE WHEN c.posture_correction IS NOT NULL THEN 1 ELSE 0 END)
+                                                   AS posture_corrections,
+                SUM(c.keystroke_count)             AS total_keystrokes,
+                SUM(c.mouse_distance_px)           AS total_mouse_px,
+                SUM(CASE WHEN c.spotify_active = 1 THEN 1 ELSE 0 END)
+                                                   AS spotify_active_count,
+                SUM(CASE WHEN c.spotify_active = 0 THEN 1 ELSE 0 END)
+                                                   AS spotify_silent_count,
+                AVG(CASE WHEN c.is_distracted = 0 THEN c.heart_rate END)
+                                                   AS focus_avg_hr,
+                MIN(c.steps)                       AS steps_min,
+                MAX(c.steps)                       AS steps_max,
+                MAX(c.hrv)                         AS max_hrv,
+                MIN(c.hrv)                         AS min_hrv
+            FROM sessions s
+            LEFT JOIN captures c ON c.session_id = s.id
+            WHERE s.end_time IS NOT NULL
+            GROUP BY s.id
+            ORDER BY s.start_time ASC
+            """
+        ).fetchall()
+
+        # ── all-time totals ────────────────────────────────────────────────
+        # Captures and tasks are queried via correlated subqueries to avoid
+        # the N*M Cartesian product that a 3-way JOIN would produce.
+        totals_row = conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM sessions WHERE end_time IS NOT NULL)
+                    AS total_sessions,
+                (SELECT COALESCE(SUM(keystroke_count), 0)
+                 FROM captures WHERE session_id IN
+                     (SELECT id FROM sessions WHERE end_time IS NOT NULL))
+                    AS all_keystrokes,
+                (SELECT COUNT(*) FROM tasks WHERE session_id IN
+                     (SELECT id FROM sessions WHERE end_time IS NOT NULL))
+                    AS total_tasks,
+                (SELECT COALESCE(SUM(done), 0) FROM tasks WHERE session_id IN
+                     (SELECT id FROM sessions WHERE end_time IS NOT NULL))
+                    AS done_tasks
+            """
+        ).fetchone()
+
+        # ── Spotify artist frequency (for Heavy Rotation) ─────────────────
+        artist_rows = conn.execute(
+            """
+            SELECT session_id, spotify_artist_name
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_artist_name IS NOT NULL
+            GROUP BY session_id, spotify_artist_name
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+
+        # ── steps during rest periods (for Active Recovery) ───────────────
+        rest_steps_rows = conn.execute(
+            """
+            SELECT session_id, SUM(steps) AS rest_steps
+            FROM captures
+            WHERE is_distracted = 1 AND steps IS NOT NULL
+            GROUP BY session_id
+            """
+        ).fetchall()
+
+        # ── distinct artists per session (Diverse Palette) ────────────────
+        artist_per_session = conn.execute(
+            """
+            SELECT session_id, COUNT(DISTINCT spotify_artist_name) AS artist_count
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_artist_name IS NOT NULL
+            GROUP BY session_id
+            """
+        ).fetchall()
+
+        # ── track repeat listening (The Purist) ───────────────────────────
+        track_repeat_rows = conn.execute(
+            """
+            SELECT session_id, spotify_track_name, COUNT(*) AS cnt
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_track_name IS NOT NULL
+            GROUP BY session_id, spotify_track_name
+            ORDER BY cnt DESC
+            """
+        ).fetchall()
+
+        # ── DJ Distraction: track changes per session ─────────────────────
+        track_changes_rows = conn.execute(
+            """
+            SELECT session_id, COUNT(DISTINCT spotify_track_name) AS unique_tracks
+            FROM captures
+            WHERE spotify_active = 1 AND spotify_track_name IS NOT NULL
+            GROUP BY session_id
+            """
+        ).fetchall()
+
+        # ── posture-free sessions ──────────────────────────────────────────
+        posture_free_rows = conn.execute(
+            """
+            SELECT s.id,
+                   SUM(CASE WHEN c.posture_correction IS NOT NULL THEN 1 ELSE 0 END)
+                       AS posture_count,
+                   COUNT(c.id) AS captures
+            FROM sessions s
+            JOIN captures c ON c.session_id = s.id
+            WHERE s.end_time IS NOT NULL
+            GROUP BY s.id
+            HAVING captures >= 4
+            ORDER BY s.start_time ASC
+            """
+        ).fetchall()
+
+    # ── Python post-processing ──────────────────────────────────────────────
+    sessions: list[dict] = []
+    for r in session_rows:
+        if r["total_captures"] == 0:
+            continue
+        start = _parse_dt(r["start_time"])
+        end = _parse_dt(r["end_time"]) if r["end_time"] else None
+        dur_min = int((end - start).total_seconds() / 60) if end else 0
+        sessions.append(
+            {
+                "id": r["id"],
+                "start": start,
+                "end": end,
+                "dur_min": dur_min,
+                "goal": r["goal"] or "",
+                "total_captures": r["total_captures"],
+                "avg_focus": round(r["avg_focus"] or 0, 2),
+                "min_focus": r["min_focus"] or 0,
+                "max_focus": r["max_focus"] or 0,
+                "rest_count": r["rest_count"] or 0,
+                "posture_corrections": r["posture_corrections"] or 0,
+                "total_keystrokes": r["total_keystrokes"] or 0,
+                "spotify_active_count": r["spotify_active_count"] or 0,
+                "spotify_silent_count": r["spotify_silent_count"] or 0,
+                "focus_avg_hr": r["focus_avg_hr"],
+                "steps_min": r["steps_min"],
+                "steps_max": r["steps_max"],
+                "min_hrv": r["min_hrv"],
+                "max_hrv": r["max_hrv"],
+                "hour": start.hour,
+                "weekday": start.weekday(),  # 0=Mon, 5=Sat, 6=Sun
+            }
+        )
+
+    # ── streak calculation ─────────────────────────────────────────────────
+    session_days = sorted({s["start"].date() for s in sessions})
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
+
+    current_streak = 0
+    check_day = today if session_days and session_days[-1] == today else yesterday
+    for day in reversed(session_days):
+        if day == check_day:
+            current_streak += 1
+            check_day -= timedelta(days=1)
+        elif day < check_day:
+            break
+
+    longest_streak = 0
+    if session_days:
+        run = 1
+        longest_streak = 1
+        for i in range(1, len(session_days)):
+            if (session_days[i] - session_days[i - 1]).days == 1:
+                run += 1
+                longest_streak = max(longest_streak, run)
+            else:
+                run = 1
+
+    total_focus_minutes = sum(s["dur_min"] for s in sessions)
+
+    # ── task counts ───────────────────────────────────────────────────────
+    total_tasks_done = totals_row["done_tasks"] or 0
+
+    # ── sessions where ALL tasks were completed ────────────────────────────
+    # Scoped to ended sessions only (consistent with all other stats).
+    sessions_all_tasks_done = 0
+    with _get_conn() as conn2:
+        task_rows = conn2.execute(
+            """
+            SELECT session_id,
+                   COUNT(*) AS total,
+                   SUM(done) AS done_count
+            FROM tasks
+            WHERE session_id IN (SELECT id FROM sessions WHERE end_time IS NOT NULL)
+            GROUP BY session_id
+            HAVING total > 0
+            """
+        ).fetchall()
+    for tr in task_rows:
+        if tr["done_count"] == tr["total"]:
+            sessions_all_tasks_done += 1
+
+    # ── posture-free streak ────────────────────────────────────────────────
+    posture_free_streak = 0
+    pf_run = 0
+    for pr in posture_free_rows:
+        if pr["posture_count"] == 0:
+            pf_run += 1
+            posture_free_streak = max(posture_free_streak, pf_run)
+        else:
+            pf_run = 0
+
+    # ── consecutive high-focus sessions (Efficiency Expert) ───────────────
+    max_consec_high_focus = 0
+    run_hf = 0
+    for s in sessions:
+        if s["avg_focus"] >= 8.5:
+            run_hf += 1
+            max_consec_high_focus = max(max_consec_high_focus, run_hf)
+        else:
+            run_hf = 0
+
+    # ── same-day double-header ─────────────────────────────────────────────
+    from collections import defaultdict
+
+    day_counts: dict = defaultdict(int)
+    day_long_counts: dict = defaultdict(int)
+    for s in sessions:
+        day_counts[s["start"].date()] += 1
+        if s["dur_min"] >= 30:
+            day_long_counts[s["start"].date()] += 1
+    double_header_days = sum(1 for v in day_long_counts.values() if v >= 2)
+
+    # ── weekend sessions ──────────────────────────────────────────────────
+    has_saturday = any(s["weekday"] == 5 for s in sessions)
+    has_sunday = any(s["weekday"] == 6 for s in sessions)
+
+    # ── Spotify: heavy rotation (same artist 3 sessions in a row) ─────────
+    # artist_rows: (session_id, artist_name) unique per session
+    session_to_artists: dict = defaultdict(set)
+    for ar in artist_rows:
+        session_to_artists[ar["session_id"]].add(ar["spotify_artist_name"])
+    # Get primary artist per session (most checks)
+    artist_run = 0
+    max_artist_run = 0
+    prev_artist = None
+    for s in sessions:
+        sid = s["id"]
+        artists = session_to_artists.get(sid, set())
+        if len(artists) == 1:
+            a = next(iter(artists))
+            if a == prev_artist:
+                artist_run += 1
+            else:
+                artist_run = 1
+                prev_artist = a
+        else:
+            artist_run = 0
+            prev_artist = None
+        max_artist_run = max(max_artist_run, artist_run)
+
+    # ── Spotify: max distinct artists in one session ──────────────────────
+    max_artists_in_session = max(
+        (r["artist_count"] for r in artist_per_session), default=0
+    )
+    # artist_per_session keyed by session_id for fast lookup
+    _artists_in_session = {
+        r["session_id"]: r["artist_count"] for r in artist_per_session
+    }
+    # Album Listener: ≥1 session where only one artist played, >30 min, with music
+    has_single_artist_long_session = any(
+        _artists_in_session.get(s["id"], 0) == 1
+        and s["dur_min"] >= 30
+        and s["spotify_active_count"] > 0
+        for s in sessions
+    )
+
+    # ── Spotify: track repeat (The Purist — same track >= 12 checks) ─────
+    max_track_repeats = max((r["cnt"] for r in track_repeat_rows), default=0)
+
+    # ── Spotify: DJ Distraction ────────────────────────────────────────────
+    max_track_changes = max((r["unique_tracks"] for r in track_changes_rows), default=0)
+
+    # ── Fitbit: cool under pressure ────────────────────────────────────────
+    cool_under_pressure = any(
+        s["focus_avg_hr"] is not None and s["focus_avg_hr"] < 70 and s["dur_min"] >= 45
+        for s in sessions
+    )
+
+    # ── Fitbit: active recovery (>1000 steps in REST intervals) ──────────
+    rest_steps_map = {r["session_id"]: r["rest_steps"] or 0 for r in rest_steps_rows}
+    active_recovery_sessions = sum(1 for v in rest_steps_map.values() if v >= 1000)
+    # active_breather uses a lower threshold (>200 steps) — the same REST data
+    active_breather_sessions = sum(1 for v in rest_steps_map.values() if v >= 200)
+
+    # ── midnight span ─────────────────────────────────────────────────────
+    spans_midnight = any(
+        s["start"] is not None
+        and s["end"] is not None
+        and s["start"].date() != s["end"].date()
+        for s in sessions
+    )
+
+    # ── ghost protocol: long no-input stretch in focus mode ──────────────
+    # approximate: session with 0 total keystrokes > 0 duration
+    ghost_protocol = any(
+        s["total_keystrokes"] == 0 and s["dur_min"] >= 10 and s["rest_count"] == 0
+        for s in sessions
+    )
+
+    # ── Spotify: sessions with music active (lo_fi_loyal progress) ───────
+    lo_fi_sessions = sum(1 for s in sessions if s["spotify_active_count"] >= 4)
+
+    return {
+        # raw session list for per-session logic in achievements
+        "sessions": sessions,
+        # totals
+        "total_sessions": len(sessions),
+        "total_focus_minutes": total_focus_minutes,
+        "total_tasks_done": total_tasks_done,
+        "all_keystrokes": totals_row["all_keystrokes"] or 0,
+        # streaks
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        # time-of-day
+        "has_early_bird": any(s["hour"] < 7 for s in sessions),
+        "has_night_owl": any(s["hour"] >= 22 for s in sessions),
+        "has_lunch_warrior": any(12 <= s["hour"] < 13 for s in sessions),
+        "has_zombie": any(3 <= s["hour"] < 5 for s in sessions),
+        "spans_midnight": spans_midnight,
+        # weekend
+        "has_saturday": has_saturday,
+        "has_sunday": has_sunday,
+        # focus quality
+        "max_consec_high_focus": max_consec_high_focus,
+        "double_header_days": double_header_days,
+        "sessions_all_tasks_done": sessions_all_tasks_done,
+        "posture_free_streak": posture_free_streak,
+        # Fitbit
+        "cool_under_pressure": cool_under_pressure,
+        "active_recovery_sessions": active_recovery_sessions,
+        "active_breather_sessions": active_breather_sessions,
+        # Spotify
+        "max_artist_run": max_artist_run,
+        "max_artists_in_session": max_artists_in_session,
+        "has_single_artist_long_session": has_single_artist_long_session,
+        "max_track_repeats": max_track_repeats,
+        "max_track_changes": max_track_changes,
+        "lo_fi_sessions": lo_fi_sessions,
+        # misc
+        "ghost_protocol": ghost_protocol,
     }
