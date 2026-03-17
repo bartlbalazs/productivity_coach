@@ -123,7 +123,7 @@ The app includes a gamified badge system with over 60 unlockable achievements th
 
 ![Achievements page](docs/achievements.png)
 
-![Achievements table](docs/achievements_table.png)
+<img src="docs/achievements_table.png" alt="Achievements table" width="400">
 
 ### 💾 Data & export
 - Local SQLite database at `~/.coach/coach.db`
