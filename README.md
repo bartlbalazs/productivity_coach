@@ -8,6 +8,7 @@ An AI-powered deep work assistant that watches your focus in real time through y
 
 Built with [Streamlit](https://streamlit.io), [LangGraph](https://github.com/langchain-ai/langgraph), and [Gemini](https://cloud.google.com/vertex-ai/generative-ai/docs/overview) via Google Cloud Vertex AI.
 
+![Coach_screenshot](docs/coach.png)
 ---
 
 ## 📑 Table of Contents
@@ -20,6 +21,7 @@ Built with [Streamlit](https://streamlit.io), [LangGraph](https://github.com/lan
   - [🔔 Audio & notifications](#-audio--notifications)
   - [🔋 Break quality](#-break-quality)
   - [📊 Analytics](#-analytics)
+  - [🏆 Achievements](#-achievements)
   - [💾 Data & export](#-data--export)
 - [🔌 Integrations](#-integrations)
   - [🎵 Spotify](#-spotify)
@@ -105,6 +107,23 @@ All session data is stored locally in SQLite. Nothing leaves your machine except
 - Filter by session and call type (analyse, session_summary, weekly_summary, health_check, extract_tasks)
 - Summary stats: total calls, input/output tokens, average latency, error count
 - Per-call expandable detail: model, tokens, latency, full request and response
+
+### 🏆 Achievements
+
+The app includes a gamified badge system with over 60 unlockable achievements that reward consistency, focus quality, and good work habits.
+
+- **First steps** — complete your first session, hit 100% focus, finish all tasks in a session
+- **Streaks** — 3-day, 7-day, 21-day, and 30-day consecutive session streaks
+- **Endurance** — sessions over 2 hours, 4 hours, and 100 total hours of tracked time
+- **Focus mastery** — sustained high focus, zero distractions across multiple sessions, Iron Discipline chains
+- **Work habits** — Early Bird (before 7 AM), Night Owl (after 10 PM), Lunch Warrior, Weekend Zombie, and more
+- **Health & biometrics** — Fitbit-powered badges for flow state under low HR, recovery-aware focus, and active breaks
+- **Music** — badges for deep work with no music, peak focus with music, DJ behaviour, and loyal listener streaks
+- **Humour** — shame badges for vague session goals, 4-hour marathons, and chaotic track-skipping
+
+![Achievements page](docs/achievements.png)
+
+![Achievements table](docs/achievements_table.png)
 
 ### 💾 Data & export
 - Local SQLite database at `~/.coach/coach.db`
