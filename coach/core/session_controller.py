@@ -609,10 +609,13 @@ def submit_log_entry(note: str) -> None:
         updated_log = log_entries + [new_entry]
         st.session_state["session_log"] = updated_log
 
+        # Capture whether focus is currently empty *before* extraction runs, so
+        # that auto-focus logic below uses a stable snapshot.
+        focus_was_empty = not st.session_state.get("current_focus", "").strip()
+
         # Extract tasks from the full updated log via LLM, excluding already-done tasks
         try:
             current_tasks: list[Task] = st.session_state.get("session_tasks", [])
-            had_active_tasks = any(not t.done for t in current_tasks)
             done_texts = [t.text for t in current_tasks if t.done]
             logger.info(
                 "Extracting tasks from log (%d entries, %d done).",
@@ -625,16 +628,14 @@ def submit_log_entry(note: str) -> None:
             st.session_state["session_tasks"] = tasks
             if scheduler:
                 scheduler.update_tasks(tasks)
-            # If there were no active tasks before this submission, auto-focus the
-            # first newly extracted task so the user immediately has a task in focus.
-            if not had_active_tasks:
+            # Only auto-focus if the session had no focus set before this submission.
+            if focus_was_empty:
                 new_active = [t for t in tasks if not t.done]
                 if new_active:
                     logger.info(
-                        "No prior active tasks — auto-focusing first extracted task: %r",
+                        "Focus was empty — auto-focusing first extracted task: %r",
                         new_active[0].text,
                     )
-                    # Override the note-based focus with the cleaner task text.
                     st.session_state["current_focus"] = new_active[0].text
                     st.session_state["session_goal"] = new_active[0].text
                     if scheduler:
@@ -645,13 +646,15 @@ def submit_log_entry(note: str) -> None:
         except Exception as exc:
             logger.warning("Task extraction failed, keeping existing tasks: %s", exc)
 
-    st.session_state["current_focus"] = note
-    st.session_state["session_goal"] = note
+    # Only update focus/goal when it was empty at the time of submission.
+    if not st.session_state.get("current_focus", "").strip():
+        st.session_state["current_focus"] = note
+        st.session_state["session_goal"] = note
 
-    if scheduler:
-        scheduler.update_goal(note)
-    if session_id:
-        update_session_goal(session_id, note)
+        if scheduler:
+            scheduler.update_goal(note)
+        if session_id:
+            update_session_goal(session_id, note)
 
 
 def set_current_focus(text: str) -> None:
