@@ -208,7 +208,11 @@ class MonitoringScheduler:
         # Join the heartbeat thread so it cannot refresh a lock we just released.
         # Use a short timeout — the heartbeat wakes on _stop_event so this should
         # return almost immediately.
-        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+        if (
+            self._heartbeat_thread is not None
+            and self._heartbeat_thread.is_alive()
+            and self._heartbeat_thread is not threading.current_thread()
+        ):
             self._heartbeat_thread.join(timeout=2)
         logger.info("Stop signal sent to scheduler.")
 
