@@ -6,6 +6,7 @@ import html
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -52,7 +53,7 @@ with st.sidebar:
     st.divider()
 
     if all_stats:
-        dates = [s["start_time"].date() for s in all_stats]
+        dates = [s["start_time"].astimezone(tz=None).date() for s in all_stats]
         min_date = min(dates)
         max_date = max(dates)
     else:
@@ -74,7 +75,11 @@ with st.sidebar:
 # Filter sessions by date range
 # ---------------------------------------------------------------------------
 
-filtered = [s for s in all_stats if date_from <= s["start_time"].date() <= date_to]
+filtered = [
+    s
+    for s in all_stats
+    if date_from <= s["start_time"].astimezone(tz=None).date() <= date_to
+]
 
 # ---------------------------------------------------------------------------
 # Header
@@ -104,7 +109,7 @@ def _compute_streaks(stats: list[dict]) -> dict:
             "total_focus_minutes": 0,
         }
 
-    session_days = sorted({s["start_time"].date() for s in active})
+    session_days = sorted({s["start_time"].astimezone(tz=None).date() for s in active})
     today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
 
@@ -215,15 +220,16 @@ for s in active_filtered:
     dur_min = 0
     if s["end_time"] and s["start_time"]:
         dur_min = max(0, int((s["end_time"] - s["start_time"]).total_seconds() / 60))
+    start_local = s["start_time"].astimezone(tz=None)
     rows.append(
         {
-            "date": s["start_time"].date(),
+            "date": start_local.date(),
             "start_dt": s["start_time"],
             "avg_focus": s["avg_focus"],
             "focused_pct": s["focused_pct"],
             "total_captures": s["total_captures"],
             "dur_min": dur_min,
-            "hour_of_day": s["start_time"].hour + s["start_time"].minute / 60,
+            "hour_of_day": start_local.hour + start_local.minute / 60,
         }
     )
 
@@ -303,27 +309,49 @@ if not df_sessions.empty and len(df_sessions) >= 3:
         cat = _CAT_HIGH if score >= 7 else (_CAT_MID if score >= 5 else _CAT_LOW)
         scatter_rows.append(
             {
-                "Date": pd.Timestamp(row["date"]),
-                cat: round(row["hour_of_day"], 2),
+                "Date": row["date"].isoformat(),
+                "hour_of_day": round(row["hour_of_day"], 2),
+                "Focus Level": cat,
             }
         )
 
     df_scatter = pd.DataFrame(scatter_rows)
 
-    # Only pass color list for categories that actually appear in the data.
-    present_cats = [
-        c for c in [_CAT_HIGH, _CAT_MID, _CAT_LOW] if c in df_scatter.columns
-    ]
-
-    if present_cats:
-        st.scatter_chart(
-            df_scatter,
-            x="Date",
-            y=present_cats,
-            color=[_CAT_COLORS[c] for c in present_cats],
-            y_label="Hour of Day (24h)",
-            height=280,
+    if not df_scatter.empty:
+        scatter_chart = (
+            alt.Chart(df_scatter)
+            .mark_circle(size=80, opacity=0.8)
+            .encode(
+                x=alt.X("Date:O", title="Date"),
+                y=alt.Y(
+                    "hour_of_day:Q",
+                    title="Time of Day",
+                    scale=alt.Scale(domain=[0, 24]),
+                    axis=alt.Axis(
+                        values=list(range(0, 25, 2)),
+                        labelExpr="datum.value + ':00'",
+                    ),
+                ),
+                color=alt.Color(
+                    "Focus Level:N",
+                    scale=alt.Scale(
+                        domain=[_CAT_HIGH, _CAT_MID, _CAT_LOW],
+                        range=[
+                            _CAT_COLORS[_CAT_HIGH],
+                            _CAT_COLORS[_CAT_MID],
+                            _CAT_COLORS[_CAT_LOW],
+                        ],
+                    ),
+                ),
+                tooltip=[
+                    alt.Tooltip("Date:O", title="Date"),
+                    alt.Tooltip("hour_of_day:Q", title="Hour", format=".1f"),
+                    alt.Tooltip("Focus Level:N", title="Focus Level"),
+                ],
+            )
+            .properties(height=280)
         )
+        st.altair_chart(scatter_chart, use_container_width=True)
 
 st.divider()
 
@@ -376,7 +404,9 @@ for s in filtered:
                 chart_data = pd.DataFrame(
                     [
                         {
-                            "Time": r.timestamp.replace(tzinfo=None),
+                            "Time": r.timestamp.astimezone(tz=None).replace(
+                                tzinfo=None
+                            ),
                             "Focus": r.focus_score,
                         }
                         for r in captures

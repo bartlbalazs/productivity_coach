@@ -585,7 +585,7 @@ def _render_focus_chart() -> None:
 
     data = [
         {
-            "Time": rec.timestamp.strftime("%H:%M"),
+            "Time": rec.timestamp.astimezone(tz=None).strftime("%H:%M"),
             "Focus Score": rec.focus_score,
             "Mode": rec.mode_label,
         }

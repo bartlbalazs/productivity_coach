@@ -1301,7 +1301,7 @@ def get_achievement_stats() -> dict:
                 "steps_max": r["steps_max"],
                 "min_hrv": r["min_hrv"],
                 "max_hrv": r["max_hrv"],
-                "hour": start.hour,
+                "hour": start.astimezone(tz=None).hour,
                 "weekday": start.weekday(),  # 0=Mon, 5=Sat, 6=Sun
             }
         )
