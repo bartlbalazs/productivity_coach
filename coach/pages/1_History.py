@@ -351,7 +351,7 @@ if not df_sessions.empty and len(df_sessions) >= 3:
             )
             .properties(height=280)
         )
-        st.altair_chart(scatter_chart, use_container_width=True)
+        st.altair_chart(scatter_chart, width="stretch")
 
 st.divider()
 
